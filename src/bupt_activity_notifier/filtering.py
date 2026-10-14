@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 from typing import Any, Mapping
 
 AREA_NAMES = {
@@ -70,13 +71,40 @@ def matches_shahe_checkin_no_checkout(activity: Activity) -> bool:
     )
 
 
+BEIJING_TIME = timezone(timedelta(hours=8))
+
+
+def _display_time(value: str) -> tuple[str, bool]:
+    """Convert explicit UTC/offset timestamps, but never guess naive timezones."""
+    if not value:
+        return "", False
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return value, False
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        return value, False
+    local_time = parsed.astimezone(BEIJING_TIME)
+    return local_time.strftime("%Y-%m-%d %H:%M"), True
+
+
 def render_activity(activity: Activity) -> str:
     signup = activity.requires(SIGN_UP)
     signup_label = "需报名" if signup else "不报名" if signup is False else "报名未知"
+    start, start_converted = _display_time(activity.start)
+    end, end_converted = _display_time(activity.end)
+    if start_converted and end_converted:
+        time_label = "时间（北京时间）"
+    else:
+        time_label = "时间"
+        if start_converted:
+            start += "（北京时间）"
+        if end_converted:
+            end += "（北京时间）"
     return (
         f"{activity.title}\n"
         f"校区：{activity.area_label} {activity.location}\n"
-        f"时间：{activity.start} 至 {activity.end}\n"
+        f"{time_label}：{start} 至 {end}\n"
         f"要求：{signup_label} / 需签到 / 不签退\n"
         f"活动 ID：{activity.id}"
     )
