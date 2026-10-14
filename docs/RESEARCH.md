@@ -71,7 +71,8 @@ demands: bit 0 (1) 需报名；bit 1 (2) 需签到；bit 2 (4) 需签退
 - [ ] 长期 Token 续期/会话恢复方案（当前仅支持有效 Token）
 - [ ] 长时间运行的速率与稳定性验收
 - [ ] 校区、签到要求修改后的真实推送行为回归
-- [ ] ServerChan / OneBot 用自己的账号进行真实发送
+- [x] ServerChan 使用本人配置的 SendKey 发送虚构测试活动，接口报告成功，用户确认微信端实际收到（2026-10-14）
+- [ ] OneBot 使用本人可控的真实 QQ 账号完成送达验收（仅本机模拟 HTTP 已通过）
 - [ ] 学校/小程序内部接口长期可用性与授权规则核对
 
 ## v0.3 工程可靠性验收（2026-10-14）
@@ -82,6 +83,13 @@ demands: bit 0 (1) 需报名；bit 1 (2) 需签到；bit 2 (4) 需签退
 - 首次运行仍然只建立基线，不推送既有活动；旧版 `seen_ids` 状态可迁移。
 - 增加 Docker Compose 与 GitHub Actions 构建入口；这些属于部署准备，**不代表生产环境已经运行**。
 - `SECONDCLASS_TOKEN_FILE` 支持 watcher 重新读取合法获取的 Token；**不会自动登录、刷新凭证或绕过验证码**。
+
+## 微信端真实推送验收（2026-10-14）
+
+- 使用本地被 Git 忽略的 `.env` 配置 ServerChan SendKey；未把真实密钥输出到终端、聊天或仓库。
+- 运行 `python -m bupt_activity_notifier --test-push`，发送一条**虚构且明确标记为测试**的活动通知；程序显示 `Test notification accepted by configured provider(s).`，退出码为 `0`。
+- 用户随后明确确认**本人微信端确实收到了该消息**，所以 ServerChan → 微信的真实端到端测试判定 **PASS**。
+- 该结果只证明测试通知送达；不代表第二课堂持续轮询、真实活动触发的推送或 OneBot QQ 送达已完成验收。
 
 ## 安全与开发边界
 
