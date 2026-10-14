@@ -50,7 +50,10 @@ class Credentials:
                 "Missing SECONDCLASS_TOKEN or SECONDCLASS_TOKEN_FILE. "
                 "Configure one privately (see .env.example)."
             )
-        return cls(token=token)
+        # Opt-in only. A renewed token must have the same JWT subject and a
+        # strictly later expiration than the original manually supplied token.
+        from .auto_renew import choose_token
+        return cls(token=choose_token(token))
 
 
 def _jwt_claims(token: str) -> Mapping[str, Any]:

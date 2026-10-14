@@ -4,13 +4,16 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "bupt-activity-notifier"
-version = "0.4.0"
+version = "0.5.0"
 description = "Read-only BUPT second-classroom activity watcher with campus and attendance filters"
 readme = "README.md"
 requires-python = ">=3.10"
 license = "MIT"
 authors = [{ name = "mohualzy" }]
 dependencies = ["requests>=2.31,<3", "python-dotenv>=1.0,<2"]
+
+[project.optional-dependencies]
+auto-renew = ["playwright>=1.53,<2"]
 
 [project.scripts]
 bupt-activity = "bupt_activity_notifier.cli:main"

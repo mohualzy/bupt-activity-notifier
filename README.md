@@ -2,7 +2,7 @@
 
 面向北邮学生的**非官方、只读**第二课堂活动提醒器。读取学生端真实活动列表，筛选**沙河校区、需签到、不签退**的活动，并在有新匹配时通过微信或 QQ 提醒。
 
-**当前进度（2026-10-14）：** 校园活动接口已由 Windows 浏览器与独立 Python `requests` 两种方式实测 HTTP 200；当时返回 19 条活动，1 条符合筛选条件。推送接入代码、本地模拟测试及 **ServerChan → 本人微信端测试消息真实送达** 已验收；Windows 登录自启后台任务已持续运行，并于 16:16 **真实发现一条新活动、成功提交一次微信渠道推送且未重复通知**（该活动的手机实收待本人确认）。**自动登录和多日连续运行尚未验收**。
+**当前进度（2026-10-14）：** 校园活动接口已由 Windows 浏览器与独立 Python `requests` 两种方式实测 HTTP 200；当时返回 19 条活动，1 条符合筛选条件。推送接入代码、本地模拟测试及 **ServerChan → 本人微信端测试消息真实送达** 已验收；Windows 登录自启后台任务已持续运行，并于 16:16 **真实发现一条新活动、成功提交一次微信渠道推送且未重复通知**（该活动的手机实收待本人确认）。**基于原项目 Playwright 的自动重登模块已完成离线验证、默认关闭；真实自动登录和多日连续运行尚未验收**。
 
 ## 已实现
 
@@ -14,6 +14,7 @@
 - 微信 ServerChan、QQ OneBot v11 私聊/群聊（需自行配置）
 - **分渠道确认与重试**：微信成功、QQ 失败时，重新运行不会再次给微信发送同一条消息
 - Windows 任务计划程序登录自启、日志轮换、单实例防重复运行
+- **可选、默认关闭**的 Playwright 浏览器重新登录：账号密码和已校验的新 JWT 仅保存在 Windows 凭据管理器，同账户/较长有效期/真实学生端 GET 通过才切换；遇验证码等认证挑战停止自动尝试
 - `--watch` 每轮重读私有 `.env` 或 Token 文件；到期前 24 小时和已过期时分别向配置的微信/QQ 渠道最多提醒一次
 - Docker Compose 部署样例及 CI 构建测试
 - 不报名、不签到、不签退、不修改账号
@@ -64,6 +65,24 @@ Get-Content .\logs\watch.log -Tail 20
 
 计划任务以**当前登录用户**运行，电脑关机、睡眠或用户退出登录时不会继续轮询；参见 [部署指南](docs/DEPLOYMENT.md) 了解暂停、恢复和卸载。
 
+### 可选自动重登（Windows，默认关闭）
+
+参考最早提供的 [MaplumeX/bupt_notification](https://github.com/MaplumeX/bupt_notification) 的 Playwright 登录思路，但不使用隐蔽自动化特征或跳过验证码。**不是 SSO 自动续期；需要你本人合法的第二课堂网页登录凭据。**
+
+在本人 Windows PowerShell 里：
+
+```powershell
+python -m pip install -e ".[auto-renew]"
+python -m bupt_activity_notifier --setup-auto-renew
+python -m bupt_activity_notifier --renew-now
+# 仅上一步通过真实学生端 API 验收后：
+python -m bupt_activity_notifier --enable-auto-renew
+```
+
+账号密码由你在本机交互式终端输入，仅保存于 Windows Credential Manager。新 Token 必须通过同账号、延长有效期、只读活动 API 校验；自动失败保留原有凭证和微信提醒。停用用 `--disable-auto-renew`，删除保存的登录凭据用 `--forget-auto-renew`。
+
+**当前尚未进行真实账号的 Playwright 重登测试，未开启自动重登。**详细说明、风险和启用顺序见 [自动续期部署指南](docs/AUTO_RENEW.md)。
+
 ## 关键字段
 
 | 字段 | 用法 |
@@ -80,7 +99,7 @@ Get-Content .\logs\watch.log -Tail 20
 - **微信**：在 `.env` 中设置 `SERVERCHAN_SENDKEY`，需先自行开通 [ServerChan Turbo](https://sct.ftqq.com/sendkey/)。
 - **QQ**：配置自己管理的 OneBot v11 HTTP 服务，`ONEBOT_URL`、`ONEBOT_ACCESS_TOKEN`、`ONEBOT_USER_ID` 或 `ONEBOT_GROUP_ID`。
 - **Token 更新**：运行中的 `--watch` 会每轮重新读取 `.env`；直接替换 `SECONDCLASS_TOKEN` 即可，无需重启。也可设置 `SECONDCLASS_TOKEN_FILE=secrets/token.txt`，优先从该被 Git 忽略的私有文件读取。
-- **失效处理**：当前**没有自动模拟登录或绕过验证码**的功能。Token 过期时停止有效数据查询，等本人合法重新认证并更新凭证。已核读网页登录模块及 58 个按需加载脚本，尚未确认可供学生使用的自动刷新协议。进一步实测：本人 Edge 复用北邮 SSO 会话可免输密码取得 CAS Ticket，但第二课堂回调页面最终退回登录；公开学生社区指南还将网页登录视为**管理端**、微信小程序视为**普通学生端**。**尚未证明 SSO 生成的 JWT 可替代当前学生端 Token**；详见 [Token 自动续期可行性调研](docs/AUTH_RENEWAL_RESEARCH.md)。
+- **失效处理**：默认由微信提醒本人更新 Token；可按 [自动重登指南](docs/AUTO_RENEW.md) 单独启用 Playwright + Windows 凭据管理器的重新登录功能（仍需通过真实账号验收，不绕过验证码或认证限制）。普通 SSO 自动换票未完成学生端验收，详见 [SSO 调研](docs/AUTH_RENEWAL_RESEARCH.md)。
 
 ServerChan Turbo 免费额度较小（官方文档说明每天 5 条），建议合理控制通知频率。单条消息只有在第三方接口确认成功后才记录为送达；极端情况下，如果第三方已发送成功但本机在写入状态前突然断电，仍有重发可能。
 
@@ -99,6 +118,8 @@ src/bupt_activity_notifier/
   monitor.py         # 持久化去重、分渠道回执和失败重试
   notifications.py   # 微信 ServerChan / QQ OneBot
   auth_notice.py     # Token 到期前 / 到期后限次提醒
+  auto_renew.py      # 可选 Playwright 重新登录 + 账号 / API 校验
+  win_credentials.py # Windows Credential Manager 保管可选登录凭据
   cli.py             # demo / doctor / test-push / once / watch
 scripts/
   windows_watch.py   # Windows 后台单实例启动与有限日志
@@ -106,6 +127,7 @@ scripts/
 tests/               # 合成数据单元测试，不包含真实 Token
 docs/RESEARCH.md     # 已实测证据与待解决的问题
 docs/DEPLOYMENT.md   # 本地与 Docker 使用说明
+docs/AUTO_RENEW.md   # Windows 自动重登实验性功能
 ```
 
 ## 安全边界
