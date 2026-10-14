@@ -1,92 +1,99 @@
 # 北邮第二课堂活动监控 / BUPT Activity Notifier
 
-一个独立的、**只读**的北邮第二课堂校园活动监控项目。用 Python 获取学生端活动列表，按 **校区 / 是否报名 / 是否签到 / 是否签退** 判断条件，向微信或 QQ 推送新匹配的活动。
+面向北邮学生的**非官方、只读**第二课堂活动提醒器。读取学生端真实活动列表，筛选**沙河校区、需签到、不签退**的活动，并在有新匹配时通过微信或 QQ 提醒。
 
-> **状态：API 实测通过，自动续期与真实推送待验收。** 2026-10-14 已分别从登录网页和**独立 Python requests** 通过只读接口获取 **19 条活动**，其中 **1 条**符合预设筛选条件。本仓库不包含真实 Token、用户数据或小程序原始代码。
+**当前进度（2026-10-14）：** 校园活动接口已由 Windows 浏览器与独立 Python `requests` 两种方式实测 HTTP 200；当时返回 19 条活动，1 条符合筛选条件。推送接入代码和本地模拟测试已完成，**真实推送密钥及长期自动登录尚未验收**。
 
 ## 已实现
 
-- 自动从有效 JWT 的 `sub` 获取本人用户信息：`GET /api/v1/user/{currentUserId}`
-- 自动取得 `college_id`、`class_id`、`grade`、`role_id` 和用户 `digest`，无需手动填写
-- 查询学生端校园活动：`GET /api/v1/activity`，固定 `is_group=0`
-- 按 `area` 和 `demands` **位标志**筛选
-- 首次运行不群发历史通知；其后对新增符合条件活动推送，支持去重和失败重试
-- 活动从不符合条件变成符合条件时也会通知
-- 可选 [ServerChan](https://sct.ftqq.com/)（微信通知）和 OneBot v11 HTTP（QQ）
-- **只调用学校系统的 GET 接口**，不会报名、签到、签退或变更订阅
-
-### 当前默认筛选
-
-```python
-area == 1 and (demands & 2) != 0 and (demands & 4) == 0
-```
-
-| 字段 | 值 | 含义 |
-|---|---|---|
-| `area` | `0` | 西土城校区 |
-| `area` | `1` | 沙河校区 |
-| `area` | `2` | 线上 |
-| `area` | `3` | 海南校区 |
-| `demands & 1` | 非零 | 需报名 |
-| `demands & 2` | 非零 | 需签到 |
-| `demands & 4` | 非零 | 需签退 |
-
-未提供 `area` 或 `demands` 的活动**不予匹配**，避免把“未知”误报为“不签退”。
+- 自动读取本人用户上下文及 `digest`，只需有效的本人 Token
+- 读取 `GET /api/v1/activity`，无需微信小程序持续运行
+- 位标志筛选：`area == 1 and (demands & 2) != 0 and (demands & 4) == 0`
+- 首次运行建立基线；新增匹配活动推送，避免大量历史消息
+- 微信 ServerChan、QQ OneBot v11 私聊/群聊（需自行配置）
+- **分渠道确认与重试**：微信成功、QQ 失败时，重新运行不会再次给微信发送同一条消息
+- Token 可从私有文件每轮重新加载；失效提示与过期前 24 小时提醒
+- Docker Compose 部署样例及 CI 构建测试
+- 不报名、不签到、不签退、不修改账号
 
 ## 快速开始
 
-需要 Python 3.10 及以上。Windows PowerShell：
+Python 3.10+：
 
 ```powershell
-git clone https://github.com/mohualzy/bupt-activity-notifier.git
-cd bupt-activity-notifier
+cd D:\Projects\bupt-activity-notifier
 python -m pip install -e .
-python -m unittest discover -s tests -v
+python -m unittest discover -s tests -q
 python -m bupt_activity_notifier --demo
 ```
 
-`--demo` 使用**完全虚构的离线数据**，无需账号。
+`--demo` 完全离线，不需要账号，不会向学校请求数据。
 
-### 连接真实活动接口
+### 接入真实接口
 
 ```powershell
 Copy-Item .env.example .env
-# 在本地编辑 .env，只需填写本人账号的 SECONDCLASS_TOKEN
+# 只在本地 .env 配置 SECONDCLASS_TOKEN 或 SECONDCLASS_TOKEN_FILE
 python -m bupt_activity_notifier --doctor
 python -m bupt_activity_notifier --once --dry-run
+```
+
+Token 来自**你本人有权使用的已登录第二课堂网页或小程序**。请勿把它发送给他人、上传仓库或写入日志。
+
+`--doctor` 只显示接口状态、活动数量和字段名；`--dry-run` 只显示匹配活动，不发送，也不写入去重状态。
+
+设置好推送渠道后：
+
+```powershell
+python -m bupt_activity_notifier --test-push
 python -m bupt_activity_notifier --once
-# 确认推送配置后才启用：
 python -m bupt_activity_notifier --watch
 ```
 
-有效 Token 可以从自己已经登录的第二课堂网页浏览器存储中取得（`secondclass.tokenv3`）。这是**敏感登录凭证**：只能放入私人的 `.env` 或进程环境变量，绝不要粘贴到公开讨论、提交到 GitHub 或交给陌生工具。网页/小程序 Token 是否互通受服务器账号策略影响，建议先用 `--doctor` 检查。
+`--test-push` **会真的发送一条明确标为“测试”的消息**；只在你配置了本人可控的推送渠道后执行。第一次 `--once` 或 `--watch` 仅保存当前匹配活动作为基线，不会轰炸历史消息；之后新增匹配才通知。
 
-程序会在每次轮询中重新读取本人用户上下文和 `digest`，所以 **`.env` 不再需要**手动维护六个用户字段。Token 过期后需要本人重新认证；**没有绕过登录或 KYC 的机制**。
+## 关键字段
 
-### 推送
+| 字段 | 用法 |
+|---|---|
+| `area == 1` | 沙河校区；其他值详见[研究记录](docs/RESEARCH.md) |
+| `demands & 1` | 需报名 |
+| `demands & 2` | 需签到 |
+| `demands & 4` | 需签退 |
 
-- 微信：在 `.env` 设置 `SERVERCHAN_SENDKEY`，遵循 ServerChan 官方账户和发送限制。
-- QQ：配置自己管理的 OneBot v11 HTTP 服务的 `ONEBOT_URL`、`ONEBOT_ACCESS_TOKEN`，以及 `ONEBOT_USER_ID` 或 `ONEBOT_GROUP_ID`。
+若字段缺失，不会把“未知”误报为“免签退”。
 
-`--dry-run` 只打印筛选结果，不推送，也不修改去重状态。**首次正常运行只建立匹配活动基线**；从第二次开始处理新匹配项。状态保存在被 Git 忽略的 `.state/seen.json`。不要未经允许推送到他人的 QQ 群。
+## 通知配置与 Token 轮换
 
-> 已实现推送适配器和单元测试，但尚未用真实推送密钥完成端到端发送。Token 过期时会返回明确的认证失败，不会自动重新登录。
+- **微信**：在 `.env` 中设置 `SERVERCHAN_SENDKEY`，需先自行开通 [ServerChan Turbo](https://sct.ftqq.com/sendkey/)。
+- **QQ**：配置自己管理的 OneBot v11 HTTP 服务，`ONEBOT_URL`、`ONEBOT_ACCESS_TOKEN`、`ONEBOT_USER_ID` 或 `ONEBOT_GROUP_ID`。
+- **Token 文件**：可将 `SECONDCLASS_TOKEN_FILE=secrets/token.txt` 配在 `.env`，然后把有效 Token 放入这个**被 Git 忽略**的文件。运行中的 `--watch` 每轮重新读取该文件，更新 Token 无需重启程序。
+- **失效处理**：当前**没有自动模拟登录或绕过验证码**的功能。Token 过期时停止有效数据查询，等本人合法重新认证并更新凭证。
 
-## 项目结构
+ServerChan Turbo 免费额度较小（官方文档说明每天 5 条），建议合理控制通知频率。单条消息只有在第三方接口确认成功后才记录为送达；极端情况下，如果第三方已发送成功但本机在写入状态前突然断电，仍有重发可能。
+
+项目工作状态默认位于被 Git 忽略的 `.state/seen.json`（v0.3 兼容旧版 v0.2 状态）。
+
+## Docker 部署
+
+仓库包含 `Dockerfile` 和 `compose.yaml`，支持**非 root 容器、只读根文件系统、独立持久卷、只读密钥文件**。见 [部署指南](docs/DEPLOYMENT.md)。Docker 不负责自动获取你的登录凭证。
+
+## 项目文件
 
 ```text
 src/bupt_activity_notifier/
-  api.py             # 两步只读认证与查询（真实接口已验收）
-  filtering.py       # 校区与签到签退位标志
-  monitor.py         # 轮询、状态基线、去重、失败重试
-  notifications.py   # ServerChan / OneBot v11
-  cli.py             # --demo / --doctor / --once / --watch
-tests/               # 不使用真实凭证的单元测试
-docs/RESEARCH.md     # 逆向依据、实测结果、剩余限制
+  api.py             # 用户上下文、JWT 有效期、只读活动 API
+  filtering.py       # 沙河 / 签到 / 签退精确筛选
+  monitor.py         # 持久化去重、分渠道回执和失败重试
+  notifications.py   # 微信 ServerChan / QQ OneBot
+  cli.py             # demo / doctor / test-push / once / watch
+tests/               # 合成数据单元测试，不包含真实 Token
+docs/RESEARCH.md     # 已实测证据与待解决的问题
+docs/DEPLOYMENT.md   # 本地与 Docker 使用说明
 ```
 
-## 免责声明
+## 安全边界
 
-非官方开源项目；使用的内部 API **未见官方公开稳定性保证**，其结构、认证和访问策略可能改变。请仅使用本人已获授权的学生账号、低频只读访问，并遵守学校系统及第三方平台规则。
+这是独立实现，**没有**提交解密过的小程序源文件、抓包、个人资料或真实认证凭证。服务端仅使用第二课堂网站的只读 GET 请求；通知使用使用者自己配置的第三方推送账户。请遵守学校及第三方平台的访问规则，避免高频查询；内部 API 可能变更，不保证官方支持。
 
-新闻通知监控思路参考 [MaplumeX/bupt_notification](https://github.com/MaplumeX/bupt_notification)；本仓库聚焦**学生端活动列表**，与原仓库独立。
+新闻通知项目的思路参考 [MaplumeX/bupt_notification](https://github.com/MaplumeX/bupt_notification)；本项目聚焦**学生端活动列表**。

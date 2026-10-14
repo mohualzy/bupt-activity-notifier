@@ -24,6 +24,7 @@ def dummy_jwt(sub: int = 42) -> str:
 def api_response(payload: dict, status: int = 200):
     response = Mock()
     response.status_code = status
+    response.headers = {}
     response.json.return_value = payload
     response.raise_for_status.return_value = None
     return response
@@ -113,6 +114,22 @@ class APITests(unittest.TestCase):
         with self.assertRaises(APIError) as exc:
             ActivityClient(self.credentials, session=session).list_activities()
         self.assertNotIn("secret-token", str(exc.exception))
+
+    def test_x_real_status_overrides_successful_http_200(self):
+        response = api_response({}, status=200)
+        response.headers = {"x-real-status": "401"}
+        session = Mock()
+        session.get.return_value = response
+        with self.assertRaises(AuthenticationExpired):
+            ActivityClient(self.credentials, session=session).list_activities()
+
+    def test_redirect_is_not_followed(self):
+        response = api_response({}, status=302)
+        session = Mock()
+        session.get.return_value = response
+        with self.assertRaises(APIError):
+            ActivityClient(self.credentials, session=session).list_activities()
+        self.assertFalse(session.get.call_args.kwargs["allow_redirects"])
 
     def test_other_hosts_forbidden(self):
         with self.assertRaises(ValueError):

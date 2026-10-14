@@ -1,8 +1,10 @@
 import unittest
 from unittest.mock import Mock
 
+import requests
+
 from bupt_activity_notifier.filtering import Activity
-from bupt_activity_notifier.notifications import Notifier
+from bupt_activity_notifier.notifications import Notifier, NotificationError
 
 
 class NotificationTests(unittest.TestCase):
@@ -14,8 +16,14 @@ class NotificationTests(unittest.TestCase):
             "demands": 2,
         })
 
-    def test_unconfigured_notifier(self):
+    def test_channels(self):
         self.assertFalse(Notifier().configured)
+        self.assertEqual(Notifier(serverchan_key="fake").channels, ("serverchan",))
+        self.assertEqual(
+            Notifier(serverchan_key="fake", onebot_url="https://local.example",
+                     onebot_user_id="2", onebot_group_id="3").channels,
+            ("serverchan", "onebot_private", "onebot_group"),
+        )
 
     def test_serverchan_success(self):
         response = Mock()
@@ -23,7 +31,7 @@ class NotificationTests(unittest.TestCase):
         session = Mock()
         session.post.return_value = response
         notifier = Notifier(serverchan_key="fake-key", session=session)
-        notifier.send(self.activity)
+        notifier.send_channel("serverchan", self.activity)
         args, kwargs = session.post.call_args
         self.assertEqual(args[0], "https://sctapi.ftqq.com/fake-key.send")
         self.assertIn("Synthetic Activity", kwargs["data"]["desp"])
@@ -33,8 +41,18 @@ class NotificationTests(unittest.TestCase):
         response.json.return_value = {"code": 999}
         session = Mock()
         session.post.return_value = response
-        with self.assertRaises(RuntimeError):
+        with self.assertRaises(NotificationError):
             Notifier(serverchan_key="fake-key", session=session).send(self.activity)
+
+    def test_serverchan_request_error_cannot_leak_sendkey(self):
+        session = Mock()
+        session.post.side_effect = requests.RequestException(
+            "HTTPS failure at https://sctapi.ftqq.com/SCT-SUPERSECRET.send"
+        )
+        with self.assertRaises(NotificationError) as caught:
+            Notifier(serverchan_key="SCT-SUPERSECRET", session=session).send(self.activity)
+        self.assertNotIn("SCT-SUPERSECRET", str(caught.exception))
+        self.assertIsNone(caught.exception.__cause__)
 
     def test_onebot_private_message(self):
         response = Mock()
@@ -47,30 +65,52 @@ class NotificationTests(unittest.TestCase):
             onebot_user_id="12345",
             session=session,
         )
-        notifier.send(self.activity)
+        notifier.send_channel("onebot_private", self.activity)
         args, kwargs = session.post.call_args
         self.assertEqual(args[0], "http://127.0.0.1:3000/send_private_msg")
         self.assertEqual(kwargs["json"]["user_id"], 12345)
+        self.assertTrue(kwargs["json"]["auto_escape"])
         self.assertEqual(kwargs["headers"]["Authorization"], "Bearer fake-token")
 
+    def test_onebot_group_message(self):
+        response = Mock()
+        response.json.return_value = {"status": "ok", "retcode": 0}
+        session = Mock()
+        session.post.return_value = response
+        notifier = Notifier(onebot_url="https://test.invalid", onebot_group_id="999", session=session)
+        notifier.send_channel("onebot_group", self.activity)
+        self.assertEqual(session.post.call_args.kwargs["json"]["group_id"], 999)
+
     def test_onebot_reject_insecure_nonlocal_url(self):
-        with self.assertRaises(ValueError):
-            Notifier(
-                onebot_url="http://example.org:3000",
-                onebot_user_id="12345",
-            ).send(self.activity)
+        for url in ("http://example.org:3000", "http://127.0.0.1.evil.example", "ftp://site.example"):
+            with self.subTest(url=url), self.assertRaises(NotificationError):
+                Notifier(onebot_url=url, onebot_user_id="12345").send(self.activity)
 
     def test_onebot_reject_error_return(self):
         response = Mock()
         response.json.return_value = {"status": "failed", "retcode": 100}
         session = Mock()
         session.post.return_value = response
-        with self.assertRaises(RuntimeError):
+        with self.assertRaises(NotificationError):
             Notifier(
                 onebot_url="https://example.org",
                 onebot_group_id="1",
                 session=session,
             ).send(self.activity)
+
+    def test_onebot_reject_missing_status_even_http_200(self):
+        response = Mock()
+        response.json.return_value = {"retcode": 0}
+        session = Mock()
+        session.post.return_value = response
+        with self.assertRaises(NotificationError):
+            Notifier(onebot_url="https://example.org", onebot_group_id="1",
+                     session=session).send(self.activity)
+
+    def test_invalid_onebot_user_id_does_not_expose_value(self):
+        with self.assertRaises(NotificationError) as caught:
+            Notifier(onebot_url="https://example.org", onebot_user_id="bad-id").send(self.activity)
+        self.assertNotIn("bad-id", str(caught.exception))
 
 
 if __name__ == "__main__":

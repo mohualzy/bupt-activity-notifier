@@ -74,6 +74,15 @@ demands: bit 0 (1) 需报名；bit 1 (2) 需签到；bit 2 (4) 需签退
 - [ ] ServerChan / OneBot 用自己的账号进行真实发送
 - [ ] 学校/小程序内部接口长期可用性与授权规则核对
 
+## v0.3 工程可靠性验收（2026-10-14）
+
+- 使用本地合成数据和 Mock 测试 Token 过期、私有文件轮换、HTTP `x-real-status`、拒绝重定向、认证异常脱敏。
+- 通知采用按渠道回执：ServerChan 成功但 OneBot 失败后，可以只重试 OneBot，回执立即保存到本地状态文件。
+- 本机启动回环 HTTP 模拟 OneBot 服务，成功收到了程序发出的真实 POST（完全虚构的测试活动）。
+- 首次运行仍然只建立基线，不推送既有活动；旧版 `seen_ids` 状态可迁移。
+- 增加 Docker Compose 与 GitHub Actions 构建入口；这些属于部署准备，**不代表生产环境已经运行**。
+- `SECONDCLASS_TOKEN_FILE` 支持 watcher 重新读取合法获取的 Token；**不会自动登录、刷新凭证或绕过验证码**。
+
 ## 安全与开发边界
 
 仓库中绝不保存微信小程序安装包、解包结果、个人学生数据、真实 Token 或 Digest。生产定时请求仅向官方 `https://dekt.bupt.edu.cn` 发起 `GET`；不请求报名、签到、签退、订阅或账号变更写接口。

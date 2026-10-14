@@ -1,4 +1,4 @@
-"""CLI: offline demo, privacy-preserving live diagnostic and polling."""
+"""CLI: offline demo, privacy-preserving diagnostics, and polling."""
 
 from __future__ import annotations
 
@@ -9,10 +9,16 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
-from .api import APIError, ActivityClient, Credentials
+from .api import (
+    APIError,
+    ActivityClient,
+    AuthenticationExpired,
+    Credentials,
+    token_seconds_remaining,
+)
 from .filtering import Activity, matches_shahe_checkin_no_checkout, render_activity
 from .monitor import run_once
-from .notifications import Notifier
+from .notifications import NotificationError, Notifier
 
 EXAMPLES = [
     {
@@ -29,6 +35,22 @@ EXAMPLES = [
 ]
 
 
+def make_client() -> ActivityClient:
+    """Read the token source each call. A private file can be rotated without restart."""
+    credentials = Credentials.from_environment()
+    return ActivityClient(
+        credentials,
+        base_url=os.getenv("SECONDCLASS_BASE_URL", "https://dekt.bupt.edu.cn"),
+    )
+
+
+def _token_warning(client: ActivityClient) -> str | None:
+    remaining = token_seconds_remaining(client.credentials.token)
+    if remaining is not None and 0 < remaining <= 24 * 3600:
+        return "Token expires within 24h. Update the private token source before expiration."
+    return None
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="bupt-activity",
@@ -37,6 +59,7 @@ def main(argv: list[str] | None = None) -> int:
     options = parser.add_mutually_exclusive_group(required=True)
     options.add_argument("--demo", action="store_true", help="Filter synthetic samples offline.")
     options.add_argument("--doctor", action="store_true", help="Validate live API without printing identities.")
+    options.add_argument("--test-push", action="store_true", help="Send one synthetic push to configured channels.")
     options.add_argument("--once", action="store_true", help="Poll the activity API once.")
     options.add_argument("--watch", action="store_true", help="Poll repeatedly (Ctrl+C to stop).")
     parser.add_argument("--dry-run", action="store_true", help="Print matches; do not send or save.")
@@ -52,44 +75,73 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     load_dotenv()
-    try:
-        credentials = Credentials.from_environment()
-        client = ActivityClient(
-            credentials,
-            base_url=os.getenv("SECONDCLASS_BASE_URL", "https://dekt.bupt.edu.cn"),
+    notifier = Notifier.from_environment()
+
+    if args.test_push:
+        if not notifier.configured:
+            print("No notification channel configured; see .env.example.")
+            return 2
+        sample = Activity(
+            id="synthetic-test", title="【测试】第二课堂通知连接", area=1,
+            demands=2, location="模拟活动（不是实际报名）",
+            start="", end="",
         )
-        notifier = Notifier.from_environment()
-    except (ValueError, TypeError) as exc:
-        parser.error(str(exc))
+        try:
+            notifier.send(sample)
+            print("Test notification accepted by configured provider(s).")
+            return 0
+        except NotificationError:
+            print("Test notification failed; check channel configuration privately.")
+            return 1
 
     if args.doctor:
         try:
+            client = make_client()
             outcome = client.validate_connection()
             print("Authenticated read-only API connection succeeded (HTTP 200).")
             print(f"Activities returned: {outcome['activity_count']}.")
             print("Activity keys: " + ", ".join(outcome["activity_fields"]))
+            if warning := _token_warning(client):
+                print(warning)
             return 0
-        except APIError as exc:
-            print(f"Connection validation failed: {exc}")
+        except (APIError, ValueError) as exc:
+            print(f"Connection validation failed ({type(exc).__name__}).")
             return 1
 
     if args.once:
         try:
-            run_once(client, notifier, args.state, dry_run=args.dry_run)
+            client = make_client()
+            result = run_once(client, notifier, args.state, dry_run=args.dry_run)
+            if warning := _token_warning(client):
+                print(warning)
             return 0
-        except APIError as exc:
-            print(f"Activity query failed: {exc}")
+        except (APIError, NotificationError, OSError, ValueError) as exc:
+            # Never print exception text that could contain a URL with digest.
+            print(f"Poll failed ({type(exc).__name__}).")
             return 1
 
     interval = max(60, int(os.getenv("POLL_SECONDS", "300")))
     print(f"Watching read-only activities every {interval}s; Ctrl+C to stop.")
+    previous_status = ""
     try:
         while True:
             try:
+                client = make_client()  # Fresh token on each iteration.
+                if warning := _token_warning(client):
+                    if previous_status != "expiring":
+                        print(warning)
+                    previous_status = "expiring"
                 run_once(client, notifier, args.state, dry_run=args.dry_run)
-            except Exception as exc:
-                # Avoid printing request URLs, token, digest, account info.
-                print(f"Poll failed ({type(exc).__name__}); retrying next interval.")
+                if previous_status != "expiring":
+                    previous_status = ""
+            except AuthenticationExpired:
+                if previous_status != "expired":
+                    print("Authentication expired. Update your private Token file; watcher will retry.")
+                previous_status = "expired"
+            except (APIError, NotificationError, OSError, ValueError) as exc:
+                if previous_status != type(exc).__name__:
+                    print(f"Polling paused by {type(exc).__name__}; will retry.")
+                previous_status = type(exc).__name__
             time.sleep(interval)
     except KeyboardInterrupt:
         print("Stopped.")

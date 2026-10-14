@@ -21,3 +21,12 @@ jobs:
         run: python -m unittest discover -s tests -v
       - name: Offline demo
         run: python -m bupt_activity_notifier --demo
+
+  docker-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build image
+        run: docker build -t bupt-activity-notifier:ci .
+      - name: Run synthetic demo without credentials
+        run: docker run --rm bupt-activity-notifier:ci bupt-activity --demo

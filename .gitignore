@@ -11,6 +11,10 @@ build/
 !.env.example
 .state/
 state/
+data/
+secrets/
+*.token
+*.secret
 logs/
 *.log
 *.wxapkg

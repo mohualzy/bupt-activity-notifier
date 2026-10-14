@@ -10,6 +10,8 @@ import base64
 import binascii
 import json
 import os
+import time
+from pathlib import Path
 from dataclasses import dataclass
 from typing import Any, Mapping
 from urllib.parse import quote
@@ -33,30 +35,61 @@ class Credentials:
 
     @classmethod
     def from_environment(cls) -> "Credentials":
-        token = os.getenv("SECONDCLASS_TOKEN", "").strip()
+        """Optionally reread a private token file on every polling cycle."""
+        token_file = os.getenv("SECONDCLASS_TOKEN_FILE", "").strip()
+        if token_file:
+            try:
+                token = Path(token_file).expanduser().read_text(encoding="utf-8").strip()
+            except (OSError, UnicodeError):
+                raise ValueError("Cannot read SECONDCLASS_TOKEN_FILE.") from None
+        else:
+            token = os.getenv("SECONDCLASS_TOKEN", "").strip()
+
         if not token or token == "replace_with_your_own_token":
             raise ValueError(
-                "Missing SECONDCLASS_TOKEN. Set it privately in .env "
-                "(see .env.example). Never commit credentials."
+                "Missing SECONDCLASS_TOKEN or SECONDCLASS_TOKEN_FILE. "
+                "Configure one privately (see .env.example)."
             )
         return cls(token=token)
 
 
-def _jwt_subject(token: str) -> str:
-    """Decode the JWT subject for the *official* current-user path.
-
-    Decoding a JWT is not signature verification; the server authenticates it.
-    """
+def _jwt_claims(token: str) -> Mapping[str, Any]:
+    """Decode untrusted claims. Only the server can verify the signature."""
     try:
-        encoded = token.split(".")[1]
-        encoded += "=" * (-len(encoded) % 4)
-        payload = json.loads(base64.urlsafe_b64decode(encoded))
-        subject = str(payload["sub"])
+        parts = token.split(".")
+        if len(parts) != 3:
+            raise ValueError
+        encoded = parts[1] + "=" * (-len(parts[1]) % 4)
+        result = json.loads(base64.urlsafe_b64decode(encoded))
+        if not isinstance(result, dict):
+            raise ValueError
+        return result
+    except (ValueError, IndexError, KeyError, TypeError, UnicodeDecodeError, binascii.Error):
+        raise AuthenticationExpired("Invalid token format; authenticate again.") from None
+
+
+def token_seconds_remaining(token: str, now: float | None = None) -> int | None:
+    """Return seconds until the JWT exp (or None when missing)."""
+    exp = _jwt_claims(token).get("exp")
+    if exp is None:
+        return None
+    if isinstance(exp, bool):
+        raise AuthenticationExpired("Invalid token expiration.")
+    try:
+        expiry = int(exp)
+    except (TypeError, ValueError, OverflowError):
+        raise AuthenticationExpired("Invalid token expiration.") from None
+    return int(expiry - (time.time() if now is None else now))
+
+
+def _jwt_subject(token: str) -> str:
+    try:
+        subject = str(_jwt_claims(token)["sub"])
         if not subject.isdecimal() or len(subject) > 30:
             raise ValueError
         return subject
-    except (ValueError, IndexError, KeyError, TypeError, UnicodeDecodeError, binascii.Error):
-        raise AuthenticationExpired("Invalid token format; authenticate again.") from None
+    except (KeyError, ValueError):
+        raise AuthenticationExpired("Invalid token subject; authenticate again.") from None
 
 
 def _unwrap_payload(payload: Any) -> Mapping[str, Any]:
@@ -99,6 +132,9 @@ class ActivityClient:
         self.timeout = timeout
 
     def _get(self, path: str, *, params: dict[str, str | int] | None = None) -> Mapping[str, Any]:
+        remaining = token_seconds_remaining(self.credentials.token)
+        if remaining is not None and remaining <= 0:
+            raise AuthenticationExpired("Token expired; update your private token source.")
         try:
             response = self.session.get(
                 self.base_url + path,
@@ -106,12 +142,24 @@ class ActivityClient:
                 headers={
                     "Authorization": "Bearer " + self.credentials.token,
                     "Accept": "application/json",
-                    "User-Agent": "bupt-activity-notifier/0.2 (read-only)",
+                    "User-Agent": "bupt-activity-notifier/0.3 (read-only)",
                 },
                 timeout=self.timeout,
+                allow_redirects=False,
             )
-            if response.status_code in (401, 403):
+            # The mini program's HTTP middleware honors x-real-status.
+            # A successful-looking HTTP 200 may still carry a logical 401/403.
+            status = response.status_code
+            logical = response.headers.get("x-real-status", "")
+            try:
+                if logical:
+                    status = int(logical)
+            except (ValueError, TypeError):
+                raise APIError("Invalid response status header.") from None
+            if status in (401, 403):
                 raise AuthenticationExpired("Access denied or login expired (401/403).")
+            if status >= 400 or 300 <= response.status_code < 400:
+                raise APIError("Second Classroom GET returned an unsuccessful status.")
             response.raise_for_status()
             return _unwrap_payload(response.json())
         except AuthenticationExpired:

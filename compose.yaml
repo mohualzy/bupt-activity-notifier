@@ -1,0 +1,24 @@
+services:
+  notifier:
+    build: .
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      SECONDCLASS_TOKEN_FILE: /run/secrets/secondclass_token
+    secrets:
+      - secondclass_token
+    volumes:
+      - activity_state:/data
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+
+secrets:
+  secondclass_token:
+    file: ./secrets/token.txt
+
+volumes:
+  activity_state:
