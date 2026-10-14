@@ -63,5 +63,47 @@ class BrowserLoginSafetyTests(unittest.TestCase):
         playwright.assert_not_called()
 
 
+    @patch("bupt_activity_notifier.auto_renew.time.monotonic", side_effect=[0, 29])
+    @patch("playwright.sync_api.sync_playwright")
+    def test_auth_challenge_reports_safe_stage_without_body_access(self, playwright, clock):
+        manager = MagicMock()
+        playwright.return_value.__enter__.return_value = manager
+        page = manager.chromium.launch.return_value.new_context.return_value.new_page.return_value
+        page.evaluate.return_value = ""
+        response = MagicMock()
+        response.url = "https://dekt.bupt.edu.cn/api/v1/auth/sessions"
+        response.request.method = "POST"
+        response.headers = {"x-real-status": "420"}
+        response.status = 200
+
+        def on_goto(*args, **kwargs):
+            listener = page.on.call_args.args[1]
+            listener(response)
+            return MagicMock(status=200)
+
+        page.goto.side_effect = on_goto
+        with self.assertRaises(RenewalError) as caught:
+            browser_sign_in("fake", "fake")
+        self.assertEqual(caught.exception.code, "verification_required")
+        response.body.assert_not_called()
+        response.json.assert_not_called()
+        response.text.assert_not_called()
+
+    @patch("playwright.sync_api.sync_playwright")
+    def test_transient_navigation_error_does_not_abort_success(self, playwright):
+        manager = MagicMock()
+        playwright.return_value.__enter__.return_value = manager
+        page = manager.chromium.launch.return_value.new_context.return_value.new_page.return_value
+        page.evaluate.side_effect = [RuntimeError("navigation in progress"), "fake.jwt.secret"]
+        result = browser_sign_in("synthetic-user", "synthetic-password")
+        self.assertEqual(result, "fake.jwt.secret")
+        self.assertEqual(page.evaluate.call_count, 2)
+
+    def test_renewal_failure_code_is_from_fixed_set(self):
+        from bupt_activity_notifier.auto_renew import RenewalError
+        error = RenewalError("potentially unsafe detail", code="MY_RAW_SECRET_VALUE")
+        self.assertEqual(error.code, "browser_error")
+
+
 if __name__ == "__main__":
     unittest.main()

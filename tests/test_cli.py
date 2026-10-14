@@ -145,6 +145,21 @@ class CLITests(unittest.TestCase):
                 self.assertEqual(main(["--setup-auto-renew"]), 2)
             self.assertIn("local interactive terminal", output.getvalue())
 
+    @patch("bupt_activity_notifier.cli.renew_if_due", return_value=True)
+    @patch("bupt_activity_notifier.cli.make_client")
+    def test_visible_manual_trial_routes_headless_false(self, client, renew):
+        # Simulate a real person's interactive terminal without real sign-in.
+        with patch("sys.stdin.isatty", return_value=True), \
+             patch("sys.stdout.isatty", return_value=True):
+            self.assertEqual(main(["--renew-now", "--headed"]), 0)
+        self.assertFalse(renew.call_args.kwargs["headless"])
+
+    @patch("bupt_activity_notifier.cli.renew_if_due")
+    def test_visible_manual_trial_refuses_remote_or_piped_console(self, renew):
+        with patch("sys.stdin.isatty", return_value=False):
+            self.assertEqual(main(["--renew-now", "--headed"]), 2)
+        renew.assert_not_called()
+
 
 if __name__ == "__main__":
     unittest.main()

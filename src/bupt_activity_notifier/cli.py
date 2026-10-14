@@ -107,15 +107,28 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.renew_now:
+        import sys
+
+        # Human-supervised browser login must be launched from the person's
+        # own terminal, not from a scheduled task or a remote command runner.
+        if args.headed and not (sys.stdin.isatty() and sys.stdout.isatty()):
+            print("Start visible login from your local interactive PowerShell.")
+            return 2
         try:
             client = make_client()
-            if renew_if_due(client, args.state, force=True):
+            if renew_if_due(client, args.state, force=True, headless=not args.headed):
                 print("A newly issued student token passed read-only API validation.")
                 print("Automatic use remains opt-in (SECONDCLASS_AUTO_RENEW=1).")
                 return 0
-        except (RenewalError, APIError, ValueError):
-            pass
-        print("Re-login test did not pass; existing activity watcher is unchanged.")
+        except RenewalError as exc:
+            # Fixed diagnostic codes only; never include password, URLs,
+            # ticket, token, account data or Playwright exception strings.
+            print(f"Re-login failed at stage: {exc.code}. Existing watcher is unchanged.")
+            return 1
+        except (APIError, ValueError):
+            print("Re-login trial could not read the existing private token.")
+            return 1
+        print("Re-login did not complete; existing activity watcher is unchanged.")
         return 1
 
     if args.enable_auto_renew or args.disable_auto_renew or args.forget_auto_renew:

@@ -15,13 +15,28 @@
 - 失败不更改现有已知有效的 Token，保留原来的到期前微信提醒；自动重登两次尝试至少相隔 12 小时。无需重设去重状态，也不会重复推送历史消息。
 - 登录凭据会在每次自动登录时送往**第二课堂官网的正常网页登录表单**，不传给 Telegram、ServerChan 或其他代理。此功能仅适合使用者本人拥有的账户。
 
+## 独立实验分支：一次可视化登录验收（推荐先完成）
+
+实验代码存放在 `D:\\Projects\\bupt-activity-notifier-lab`，正式活动监控继续使用 `D:\\Projects\\bupt-activity-notifier` 的稳定 `main`，互不修改源码。已在同一 Windows 用户的 Credential Manager 中保存官网网页登录凭据的使用者，不必重复录入密码。
+
+**在你本人直接打开的、非远程重定向的 PowerShell 窗口**执行一行：
+
+```powershell
+pwsh -NoProfile -File 'D:\Projects\bupt-activity-notifier-lab\scripts\run_visible_renewal_trial.ps1'
+```
+
+此脚本临时从正式项目的私有 `.env` **内存加载现有 Token**，实际使用独立实验代码启动 **可见的正常 Edge**。遇网站官方验证码/人工验证时在浏览器里自行完成，不自动识别或绕过。只记录脱敏的失败阶段码；不显示/保存密码、响应正文、Cookie、Ticket 或 JWT。即使成功，**也只是将新 JWT 写入该 Windows 用户的凭据管理器，自动续期仍保持关闭**，不修改正式仓库、原 `.env`、定时任务与活动去重账本。
+
+失败阶段代码：`verification_required`（网站要求交互验证）、`login_rejected`（网页登录拒绝）、`login_not_completed`（登录后未获得新 JWT）、`wrong_student`（JWT 账号不符）、`not_renewed`（JWT 未延长有效期）、`student_api_rejected`（新 JWT 不能访问学生端活动 API）、`browser_error`（浏览器层异常）。**成功须显示 student token passed read-only API validation**；任何单纯网页“登录成功”提示都不够。
+
 ## 本机部署（需在用户本人的交互式 PowerShell 中）
 
 保持本地已有登录 Token 与微信 SendKey，不要删除 `.env`、`.state/seen.json`：
 
 ```powershell
-cd D:\Projects\bupt-activity-notifier
-python -m pip install -e ".[auto-renew]"
+cd D:\Projects\bupt-activity-notifier-lab
+python -m pip install playwright
+$env:PYTHONPATH = "$PWD\src"
 ```
 
 **第一步：** 在你的电脑终端执行，自己输入第二课堂官网登录账号和密码；密码不会回显，助手及终端命令历史不会看到值。
@@ -32,21 +47,9 @@ python -m bupt_activity_notifier --setup-auto-renew
 
 这一步只写入当前 Windows 用户的凭据管理器，**不启用**自动重登。
 
-**第二步：** 主动登录一次，核实是否真的能从学生账号拿到新 JWT。
+**第二步：** 使用上文的 `run_visible_renewal_trial.ps1` 在本人交互式终端进行一次人工可见的 Playwright 登录验收。已保存网页登录凭据的用户可以直接跳过第一步。实验进程不收集新的密码输入，也不读取 Edge 现有 Cookie。
 
-```powershell
-python -m bupt_activity_notifier --renew-now
-```
-
-此命令使用全新 Playwright Edge 会话正常打开官方网页、输入 Windows 凭据管理器中的本人凭证、点击登录。只在验证新 JWT 具有相同账户和可用的学生端只读 API 后才保存；返回失败时不改变当前 watcher 配置或 Token。由于学校可能要求验证码/安全验证，**不能保证无人干预成功**，失败时不要反复重试或尝试绕过防护。
-
-**第三步：** 仅当前一步明确输出 `A newly issued student token passed read-only API validation.` 后，再执行：
-
-```powershell
-python -m bupt_activity_notifier --enable-auto-renew
-```
-
-它会复核凭据管理器中已有登录账号和有效新 JWT，再写入被 Git 忽略的 `.env` 中 `SECONDCLASS_AUTO_RENEW=1`。**现有 Windows 后台 watcher 每轮重读 `.env`，无需重启、无须清空活动去重状态**。默认从当前有效期距到期 24 小时以内开始自动重新登录，失败后至少 12 小时才重试，Token 到期提醒照常存在。
+**第三步：** 只有第二步经同账户 JWT、延长有效期和学生端只读接口完整验证通过后，才能继续研究无头模式在学校认证规则下能否稳定自动更新。**当前阶段不建议运行 `--enable-auto-renew`，且该实验分支并未合入正式 `main`**。已有稳定监控继续靠原 Token 和微信过期提醒运行，不受实验影响。
 
 ## 立即停止、删除与恢复
 

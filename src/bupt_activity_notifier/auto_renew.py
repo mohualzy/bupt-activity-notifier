@@ -11,6 +11,7 @@ import json
 import os
 import time
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from .api import (
     APIError, ActivityClient, AuthenticationExpired, Credentials, _jwt_subject,
@@ -28,7 +29,18 @@ RETRY_STATE_FILENAME = "auto_renew_retry.json"
 
 
 class RenewalError(RuntimeError):
-    """Sanitized sign-in failure; never print browser or credential details."""
+    """Sanitized sign-in failure with a fixed, non-secret diagnostic code."""
+
+    CODES = frozenset({
+        "missing_login", "playwright_unavailable", "browser_error",
+        "verification_required", "login_rejected", "login_not_completed",
+        "wrong_student", "not_renewed", "student_api_rejected",
+        "credential_store", "retry_guard",
+    })
+
+    def __init__(self, message: str, *, code: str = "browser_error"):
+        super().__init__(message)
+        self.code = code if code in self.CODES else "browser_error"
 
 
 def enabled() -> bool:
@@ -89,11 +101,11 @@ def _clear_retry(state_path: Path) -> None:
 def browser_sign_in(username: str, password: str, *, headless: bool = True) -> str:
     """Let the official web login create a session; do not defeat challenges."""
     if not username or not password:
-        raise RenewalError("Automatic login has not been configured.")
+        raise RenewalError("Automatic login has not been configured.", code="missing_login")
     try:
         from playwright.sync_api import sync_playwright
     except ImportError:
-        raise RenewalError("Playwright is not installed.") from None
+        raise RenewalError("Playwright is not installed.", code="playwright_unavailable") from None
 
     try:
         with sync_playwright() as pw:
@@ -101,18 +113,59 @@ def browser_sign_in(username: str, password: str, *, headless: bool = True) -> s
             try:
                 context = browser.new_context(locale="zh-CN")
                 page = context.new_page()
+                statuses: list[int] = []
+
+                def note_login_status(response: object) -> None:
+                    # Only retain an HTTP status integer for the official
+                    # login endpoint. Never access requests or response bodies.
+                    try:
+                        url = urlsplit(response.url)
+                        if (
+                            url.hostname != "dekt.bupt.edu.cn"
+                            or url.path != "/api/v1/auth/sessions"
+                            or response.request.method != "POST"
+                        ):
+                            return
+                        raw = response.headers.get("x-real-status", "")
+                        status = int(raw) if raw.isdecimal() else int(response.status)
+                        statuses.append(status)
+                    except Exception:
+                        # An inaccessible network event must never crash the
+                        # login flow or expose its request information.
+                        return
+
+                page.on("response", note_login_status)
                 page.goto("https://dekt.bupt.edu.cn/login", wait_until="domcontentloaded", timeout=20_000)
                 page.locator("#username").fill(username, timeout=10_000)
                 page.locator("#password").fill(password, timeout=10_000)
                 page.locator("button:has-text('登录')").first.click(timeout=10_000)
                 deadline = time.monotonic() + (100 if not headless else 28)
                 while time.monotonic() < deadline:
-                    token = page.evaluate("window.localStorage.getItem('secondclass.tokenv3') || ''")
-                    if token:
-                        return token
-                    page.wait_for_timeout(1000)
+                    # A redirect can briefly destroy the JS execution context
+                    # exactly while the login succeeds. Such transient
+                    # navigation errors should not abort verification.
+                    try:
+                        token = page.evaluate(
+                            "window.localStorage.getItem('secondclass.tokenv3') || ''"
+                        )
+                        if token:
+                            return token
+                    except Exception:
+                        pass
+                    try:
+                        page.wait_for_timeout(1000)
+                    except Exception:
+                        break
+                if any(code in (419, 420) for code in statuses):
+                    raise RenewalError(
+                        "The official website requires an interactive verification.",
+                        code="verification_required",
+                    )
+                if any(code in (401, 403) for code in statuses):
+                    raise RenewalError("The official sign-in was rejected.", code="login_rejected")
                 raise RenewalError(
-                    "Official sign-in did not complete; manual CAPTCHA or login may be required."
+                    "The official sign-in did not issue a JWT within the time window.",
+                    code="login_not_completed",
                 )
             finally:
                 browser.close()
@@ -121,27 +174,33 @@ def browser_sign_in(username: str, password: str, *, headless: bool = True) -> s
     except Exception:
         # Errors from Playwright may contain current URLs, form details, and
         # browser debugging strings. Never propagate or log them.
-        raise RenewalError("Browser sign-in failed; complete any challenge manually.") from None
+        raise RenewalError(
+            "Browser sign-in failed; complete any challenge manually.",
+            code="browser_error",
+        ) from None
 
 
 def verify_candidate(candidate: str, previous: str) -> None:
     """Reject account switches and tokens that cannot read the student's API."""
     try:
         if _jwt_subject(candidate) != _jwt_subject(previous):
-            raise RenewalError("New session has a different student account.")
+            raise RenewalError("New session has a different student account.", code="wrong_student")
         new_left = token_seconds_remaining(candidate)
         old_left = token_seconds_remaining(previous)
         if (
             new_left is None or new_left < MIN_NEW_LIFETIME_SECONDS
             or (old_left is not None and new_left <= old_left + 3600)
         ):
-            raise RenewalError("New JWT did not extend the session.")
+            raise RenewalError("New JWT did not extend the session.", code="not_renewed")
         # Validate the exact student endpoints, not the management login UI.
         ActivityClient(Credentials(candidate)).validate_connection()
     except RenewalError:
         raise
     except (APIError, ValueError):
-        raise RenewalError("New JWT cannot query the same student activity API.") from None
+        raise RenewalError(
+            "New JWT cannot query the same student activity API.",
+            code="student_api_rejected",
+        ) from None
 
 
 def renew_if_due(client: ActivityClient, state_path: Path, *, force: bool = False, headless: bool = True) -> bool:
@@ -161,26 +220,28 @@ def renew_if_due(client: ActivityClient, state_path: Path, *, force: bool = Fals
         try:
             _set_retry(state_path, now)
         except OSError:
-            raise RenewalError("Cannot save the retry guard; sign-in was not attempted.") from None
+            raise RenewalError(
+                "Cannot save the retry guard; sign-in was not attempted.",
+                code="retry_guard",
+            ) from None
 
     try:
         pair = read_login()
         if not pair:
-            raise RenewalError("Windows Credential Manager has no configured login.")
+            raise RenewalError(
+                "Windows Credential Manager has no configured login.", code="missing_login"
+            )
         token = browser_sign_in(*pair, headless=headless)
         verify_candidate(token, previous)
         save_renewed_token(token)
         _clear_retry(state_path)
         return True
     except RenewalError:
-        if force:
-            # A manual trial must not schedule unexpected background retries.
-            return _failed_manual()
+        # Raise only our fixed-message errors. CLI prints a whitelisted code,
+        # never arbitrary browser exceptions, identity, or Token information.
         raise
     except (SecretStoreError, OSError):
-        raise RenewalError("Credential storage failed; existing token was not changed.") from None
-
-
-def _failed_manual() -> bool:
-    # Preserve exception as a RenewalError without exposing its message to logs.
-    raise RenewalError("Manual sign-in trial did not pass verification.") from None
+        raise RenewalError(
+            "Credential storage failed; existing token was not changed.",
+            code="credential_store",
+        ) from None
