@@ -80,7 +80,7 @@ Get-Content .\logs\watch.log -Tail 20
 - **微信**：在 `.env` 中设置 `SERVERCHAN_SENDKEY`，需先自行开通 [ServerChan Turbo](https://sct.ftqq.com/sendkey/)。
 - **QQ**：配置自己管理的 OneBot v11 HTTP 服务，`ONEBOT_URL`、`ONEBOT_ACCESS_TOKEN`、`ONEBOT_USER_ID` 或 `ONEBOT_GROUP_ID`。
 - **Token 更新**：运行中的 `--watch` 会每轮重新读取 `.env`；直接替换 `SECONDCLASS_TOKEN` 即可，无需重启。也可设置 `SECONDCLASS_TOKEN_FILE=secrets/token.txt`，优先从该被 Git 忽略的私有文件读取。
-- **失效处理**：当前**没有自动模拟登录或绕过验证码**的功能。Token 过期时停止有效数据查询，等本人合法重新认证并更新凭证。
+- **失效处理**：当前**没有自动模拟登录或绕过验证码**的功能。Token 过期时停止有效数据查询，等本人合法重新认证并更新凭证。已核读网页登录模块及 58 个按需加载脚本，尚未确认可供学生使用的自动刷新协议；详见 [Token 自动续期可行性调研](docs/AUTH_RENEWAL_RESEARCH.md)。
 
 ServerChan Turbo 免费额度较小（官方文档说明每天 5 条），建议合理控制通知频率。单条消息只有在第三方接口确认成功后才记录为送达；极端情况下，如果第三方已发送成功但本机在写入状态前突然断电，仍有重发可能。
 
