@@ -36,6 +36,31 @@ class NotificationTests(unittest.TestCase):
         self.assertEqual(args[0], "https://sctapi.ftqq.com/fake-key.send")
         self.assertIn("Synthetic Activity", kwargs["data"]["desp"])
 
+    def test_serverchan_receives_readable_multiline_markdown(self):
+        response = Mock()
+        response.json.return_value = {"code": 0}
+        session = Mock()
+        session.post.return_value = response
+        notifier = Notifier(serverchan_key="fake-key", session=session)
+        activity = Activity.from_raw({
+            "id": 13311,
+            "name": "名家面对面｜AI时代，写作应该如何进行？",
+            "area": 1,
+            "demands": 7,  # Signup, check-in AND check-out.
+            "location": "学生活动中心报告厅313",
+            "activity_start_time": "2026-10-20T06:00:00Z",
+            "activity_end_time": "2026-10-20T16:00:00Z",
+        })
+        notifier.send_channel("serverchan", activity)
+        payload = session.post.call_args.kwargs["data"]
+        self.assertEqual(payload["title"], "北邮第二课堂｜沙河新活动")
+        self.assertIn("### 名家面对面", payload["desp"])
+        self.assertIn("\n\n- **校区**：沙河校区\n", payload["desp"])
+        self.assertIn("\n- **地点**：学生活动中心报告厅313\n", payload["desp"])
+        self.assertIn("**签到**：需签到", payload["desp"])
+        self.assertIn("**签退**：需签退", payload["desp"])
+        self.assertGreater(payload["desp"].count("\n"), 8)
+
     def test_serverchan_error_is_not_silent(self):
         response = Mock()
         response.json.return_value = {"code": 999}

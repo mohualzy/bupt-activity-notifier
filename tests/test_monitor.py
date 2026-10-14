@@ -38,22 +38,28 @@ class MonitorTests(unittest.TestCase):
             notifier = mock_notifier()
             client.list_activities.return_value = [event(1)]
             run_once(client, notifier, state, output=lambda _: None)
-            client.list_activities.return_value = [event(1), event(2), event(3, demands=6)]
+            client.list_activities.return_value = [
+                event(1), event(2), event(3, demands=6),
+                event(4, area=0),
+            ]
             result = run_once(client, notifier, state, output=lambda _: None)
-            self.assertEqual(result.notified, 1)
-            self.assertEqual(notifier.send_channel.call_args.args[1].id, "2")
+            self.assertEqual(result.notified, 2)
+            self.assertEqual(
+                [c.args[1].id for c in notifier.send_channel.call_args_list],
+                ["2", "3"],
+            )
             run_once(client, notifier, state, output=lambda _: None)
-            self.assertEqual(notifier.send_channel.call_count, 1)
+            self.assertEqual(notifier.send_channel.call_count, 2)
 
-    def test_now_matching_existing_activity_triggers(self):
+    def test_activity_moving_to_shahe_triggers_notification(self):
         with tempfile.TemporaryDirectory() as folder:
             state = Path(folder) / "seen.json"
             client = Mock()
             notifier = mock_notifier()
-            client.list_activities.return_value = [event(1, demands=6)]
+            client.list_activities.return_value = [event(1, area=0)]
             run_once(client, notifier, state, output=lambda _: None)
             self.assertEqual(read_seen(state), set())
-            client.list_activities.return_value = [event(1, demands=2)]
+            client.list_activities.return_value = [event(1, area=1, demands=6)]
             result = run_once(client, notifier, state, output=lambda _: None)
             self.assertEqual(result.notified, 1)
 
@@ -143,16 +149,58 @@ class MonitorTests(unittest.TestCase):
             result = run_once(client, notifier, state, output=lambda _: None)
             self.assertEqual(result.notified, 1)
 
-    def test_legacy_state_migration(self):
+    def test_legacy_state_migration_baselines_newly_eligible_history(self):
         with tempfile.TemporaryDirectory() as folder:
             state = Path(folder) / "seen.json"
             state.write_text('{"seen_ids":["1"]}', encoding="utf-8")
             client = Mock()
-            client.list_activities.return_value = [event(1), event(2)]
+            client.list_activities.return_value = [event(1), event(2, demands=6)]
             notifier = mock_notifier()
-            self.assertEqual(run_once(client, notifier, state, output=lambda _: None).notified, 1)
+            self.assertEqual(run_once(client, notifier, state, output=lambda _: None).notified, 0)
             self.assertEqual(read_seen(state), {"1", "2"})
-            self.assertIn('"version": 2', state.read_text(encoding="utf-8"))
+            self.assertIn('"filter_policy": "shahe-area-only-v1"', state.read_text(encoding="utf-8"))
+            notifier.send_channel.assert_not_called()
+            client.list_activities.return_value.append(event(3, demands=None))
+            self.assertEqual(run_once(client, notifier, state, output=lambda _: None).notified, 1)
+            self.assertEqual(notifier.send_channel.call_args.args[1].id, "3")
+
+    def test_migration_preserves_partially_delivered_notifications(self):
+        with tempfile.TemporaryDirectory() as folder:
+            state = Path(folder) / "seen.json"
+            state.write_text(
+                '{"version":2,"seen_ids":["1"],'
+                '"delivered":{"serverchan":["2"]}}',
+                encoding="utf-8",
+            )
+            client = Mock()
+            client.list_activities.return_value = [
+                event(1), event(2, demands=6),
+                event(3, demands=0),
+            ]
+            notifier = mock_notifier(("serverchan", "onebot_private"))
+            result = run_once(client, notifier, state, output=lambda _: None)
+            self.assertEqual(result.notified, 1)
+            self.assertEqual(result.deliveries, 1)
+            self.assertEqual(notifier.send_channel.call_count, 1)
+            self.assertEqual(notifier.send_channel.call_args.args[0], "onebot_private")
+            self.assertEqual(notifier.send_channel.call_args.args[1].id, "2")
+            self.assertEqual(read_seen(state), {"1", "2", "3"})
+            self.assertEqual(read_state(state).filter_policy, "shahe-area-only-v1")
+
+    def test_unsupported_filter_state_fails_closed_without_notifications(self):
+        with tempfile.TemporaryDirectory() as folder:
+            state = Path(folder) / "seen.json"
+            state.write_text(
+                '{"version":2,"filter_policy":"future-rule",'
+                '"seen_ids":[],"delivered":{}}',
+                encoding="utf-8",
+            )
+            client = Mock()
+            client.list_activities.return_value = [event(5)]
+            notifier = mock_notifier()
+            with self.assertRaises(ValueError):
+                run_once(client, notifier, state, output=lambda _: None)
+            notifier.send_channel.assert_not_called()
 
     def test_corrupted_state_does_not_reset_or_repush(self):
         with tempfile.TemporaryDirectory() as folder:

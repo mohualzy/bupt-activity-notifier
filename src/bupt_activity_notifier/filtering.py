@@ -1,4 +1,4 @@
-"""Explicit attendance flags and campus enum, derived from observed UI logic."""
+"""Shahe campus selection and attendance details from observed UI fields."""
 
 from __future__ import annotations
 
@@ -62,13 +62,13 @@ class Activity:
         return bool(self.demands & bit)
 
 
-def matches_shahe_checkin_no_checkout(activity: Activity) -> bool:
-    """Fail closed: missing/unknown flags are never interpreted as no check-out."""
-    return (
-        activity.area == 1
-        and activity.requires(CHECK_IN) is True
-        and activity.requires(CHECK_OUT) is False
-    )
+def matches_shahe(activity: Activity) -> bool:
+    """Only the explicitly identified Shahe campus is eligible.
+
+    Attendance requirements are shown in the notification but never used
+    to exclude an activity. Unknown campus remains ineligible.
+    """
+    return activity.area == 1
 
 
 BEIJING_TIME = timezone(timedelta(hours=8))
@@ -88,23 +88,37 @@ def _display_time(value: str) -> tuple[str, bool]:
     return local_time.strftime("%Y-%m-%d %H:%M"), True
 
 
+def _markdown_safe(value: str) -> str:
+    """Treat university-supplied text as text, not Markdown/HTML syntax."""
+    import re
+
+    return re.sub(r"([\\`*_\[\]<>])", r"\\\1", value)
+
+
+def _requirement(activity: Activity, flag: int, label: str) -> str:
+    requires = activity.requires(flag)
+    if requires is None:
+        return f"{label}未知"
+    return f"需{label}" if requires else f"无需{label}"
+
+
 def render_activity(activity: Activity) -> str:
-    signup = activity.requires(SIGN_UP)
-    signup_label = "需报名" if signup else "不报名" if signup is False else "报名未知"
+    """ServerChan-compatible Markdown: separate title, fields and times."""
     start, start_converted = _display_time(activity.start)
     end, end_converted = _display_time(activity.end)
-    if start_converted and end_converted:
-        time_label = "时间（北京时间）"
-    else:
-        time_label = "时间"
-        if start_converted:
-            start += "（北京时间）"
-        if end_converted:
-            end += "（北京时间）"
-    return (
-        f"{activity.title}\n"
-        f"校区：{activity.area_label} {activity.location}\n"
-        f"{time_label}：{start} 至 {end}\n"
-        f"要求：{signup_label} / 需签到 / 不签退\n"
-        f"活动 ID：{activity.id}"
-    )
+    start_label = "开始时间（北京时间）" if start_converted else "开始时间"
+    end_label = "结束时间（北京时间）" if end_converted else "结束时间"
+
+    return "\n".join((
+        f"### {_markdown_safe(activity.title)}",
+        "",
+        f"- **校区**：{_markdown_safe(activity.area_label)}",
+        f"- **地点**：{_markdown_safe(activity.location or '未公布')}",
+        f"- **{start_label}**：{_markdown_safe(start or '未公布')}",
+        f"- **{end_label}**：{_markdown_safe(end or '未公布')}",
+        "",
+        f"- **报名**：{_requirement(activity, SIGN_UP, '报名')}",
+        f"- **签到**：{_requirement(activity, CHECK_IN, '签到')}",
+        f"- **签退**：{_requirement(activity, CHECK_OUT, '签退')}",
+        f"- **活动 ID**：`{_markdown_safe(activity.id)}`",
+    ))

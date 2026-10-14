@@ -113,7 +113,7 @@ class Notifier:
 
     def send_channel(self, channel: str, activity: Activity) -> None:
         """Send an activity to one channel with a dedicated delivery receipt."""
-        self._deliver(channel, "北邮第二课堂：符合条件的新活动", render_activity(activity))
+        self._deliver(channel, "北邮第二课堂｜沙河新活动", render_activity(activity))
 
     def send_notice_channel(self, channel: str, title: str, body: str) -> None:
         """Send a non-activity system notice (e.g. token renewal reminder)."""

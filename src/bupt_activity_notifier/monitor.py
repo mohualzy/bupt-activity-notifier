@@ -12,7 +12,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
-from .filtering import Activity, matches_shahe_checkin_no_checkout, render_activity
+from .filtering import Activity, matches_shahe, render_activity
+
+FILTER_POLICY = "shahe-area-only-v1"
 from .notifications import Notifier
 
 
@@ -29,6 +31,7 @@ class Result:
 class SeenState:
     seen_ids: set[str]
     delivered: dict[str, set[str]]
+    filter_policy: str | None = None
 
 
 def read_state(path: Path) -> SeenState:
@@ -42,9 +45,13 @@ def read_state(path: Path) -> SeenState:
         for name, ids in raw_delivered.items()
     ):
         raise ValueError("Invalid delivery ledger; refusing to reset deduplication.")
+    policy = data.get("filter_policy")
+    if policy is not None and policy != FILTER_POLICY:
+        raise ValueError("Unsupported filter policy in seen-state file.")
     return SeenState(
         seen_ids={str(item) for item in data["seen_ids"]},
         delivered={name: {str(item) for item in ids} for name, ids in raw_delivered.items()},
+        filter_policy=policy,
     )
 
 
@@ -58,6 +65,7 @@ def save_state(path: Path, state: SeenState) -> None:
     temporary = path.with_name(path.name + ".tmp")
     payload = {
         "version": 2,
+        "filter_policy": state.filter_policy,
         "seen_ids": sorted(state.seen_ids),
         "delivered": {
             name: sorted(ids)
@@ -90,7 +98,7 @@ def run_once(
         except ValueError:
             output("Skipped an activity missing its id.")
 
-    matched = [a for a in activities if matches_shahe_checkin_no_checkout(a)]
+    matched = [a for a in activities if matches_shahe(a)]
     if dry_run:
         output(f"[dry-run] {len(raw)} fetched, {len(matched)} matched; state unchanged.")
         for activity in matched:
@@ -99,11 +107,31 @@ def run_once(
 
     if not state_path.exists():
         # Baseline only currently eligible activities. This does not send history.
-        save_state(state_path, SeenState({a.id for a in matched}, {}))
+        save_state(state_path, SeenState({a.id for a in matched}, {}, FILTER_POLICY))
         output(f"First-run baseline saved ({len(matched)} matches). No notifications sent.")
         return Result(len(raw), len(matched), 0, initialized=True)
 
     state = read_state(state_path)
+    if state.filter_policy is None:
+        # The old rule only tracked "Shahe + check-in + no check-out".
+        # Broaden the rule without flooding notifications for all the
+        # previously existing Shahe activities. Preserve incomplete per-
+        # channel deliveries so that an interrupted alert can still finish.
+        partially_delivered = {
+            activity_id for ids in state.delivered.values() for activity_id in ids
+        }
+        historical = {
+            a.id for a in matched
+            if a.id not in partially_delivered
+        }
+        state.seen_ids.update(historical)
+        state.filter_policy = FILTER_POLICY
+        save_state(state_path, state)
+        output(
+            f"Filter upgraded to Shahe-only; {len(historical)} existing "
+            "activities baselined, unfinished deliveries preserved."
+        )
+
     new_matches = [a for a in matched if a.id not in state.seen_ids]
     channels = tuple(notifier.channels)
     notified = 0

@@ -17,21 +17,21 @@ from .api import (
     token_seconds_remaining,
 )
 from .auth_notice import send_auth_notice_if_needed
-from .filtering import Activity, matches_shahe_checkin_no_checkout, render_activity
+from .filtering import Activity, matches_shahe, render_activity
 from .monitor import run_once
 from .notifications import NotificationError, Notifier
 
 EXAMPLES = [
     {
         "id": 1001,
-        "name": "示例：沙河签到免签退活动（虚构）",
+        "name": "示例：沙河校园活动（虚构）",
         "area": 1,
         "location": "教学楼",
         "demands": 2,
         "activity_start_time": "2026-12-01T18:00:00",
         "activity_end_time": "2026-12-01T19:00:00",
     },
-    {"id": 1002, "name": "示例：沙河需签退活动（虚构）", "area": 1, "demands": 6},
+    {"id": 1002, "name": "示例：沙河需签退活动（仍符合筛选）", "area": 1, "demands": 6},
     {"id": 1003, "name": "示例：未知签到规则（虚构）", "area": 1},
 ]
 
@@ -71,7 +71,7 @@ def main(argv: list[str] | None = None) -> int:
         print("Synthetic example only; no network requests:")
         for item in EXAMPLES:
             activity = Activity.from_raw(item)
-            if matches_shahe_checkin_no_checkout(activity):
+            if matches_shahe(activity):
                 print(render_activity(activity))
         return 0
 
