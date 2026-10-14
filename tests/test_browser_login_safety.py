@@ -1,5 +1,7 @@
 """Offline browser-login safety checks: no school requests or actual credentials."""
 
+import sys
+import types
 import unittest
 from unittest.mock import MagicMock, patch
 
@@ -7,6 +9,20 @@ from bupt_activity_notifier.auto_renew import RenewalError, browser_sign_in
 
 
 class BrowserLoginSafetyTests(unittest.TestCase):
+    def setUp(self):
+        # This dependency is an OPTIONAL runtime extra. CI executes safety
+        # unit tests without installing a browser or the Playwright package.
+        package = types.ModuleType("playwright")
+        package.__path__ = []
+        submodule = types.ModuleType("playwright.sync_api")
+        submodule.sync_playwright = MagicMock()
+        package.sync_api = submodule
+        modules = patch.dict(
+            sys.modules, {"playwright": package, "playwright.sync_api": submodule}
+        )
+        modules.start()
+        self.addCleanup(modules.stop)
+
     @patch("playwright.sync_api.sync_playwright")
     def test_login_uses_official_web_form_without_stealth_options(self, playwright):
         manager = MagicMock()
