@@ -1,6 +1,6 @@
 # 第二课堂 Token 自动续期可行性调研
 
-日期：2026-10-14。范围：用户已授权使用的第二课堂网页 `https://dekt.bupt.edu.cn`，及公开可访问的前端 JavaScript。**只进行静态分析与公开 GET**，不提交账号密码、校内认证 Ticket，不调用新的认证 POST，不查看或记录用户私有 Token 值。
+日期：2026-10-14。范围：用户已授权使用的第二课堂网页 `https://dekt.bupt.edu.cn`、公开前端 JavaScript，及一次经用户明确要求进行的**本人现有 Edge 浏览器 SSO 跳转实测**。研究人员仅发起公开 GET 和浏览器官方 CAS 导航；浏览器可按官方页面逻辑自行发起换票请求。研究工具未手动提交账号密码、Ticket 或认证 POST，不导出 Cookie，不查看、记录或复制 Token/Ticket 值。
 
 ## 结论
 
@@ -34,7 +34,7 @@
 | 前端调用 | 前端用途 | 对无人值守续期的意义 |
 | --- | --- | --- |
 | `POST /api/v1/auth/sessions` | 网站账号密码登录，携带验证码字段 `captcha` / `code` | **重新登录**；并非已证实的 JWT refresh；不能假定可跳过验证码或安全储存密码 |
-| `POST /api/v1/auth/bupt/sessions` | 北邮统一认证成功后，使用回跳 `ticket` 换取第二课堂 JWT | 需要实时且有效的 SSO Ticket；是否能复用既有 SSO 登录态、能持续多久均未验证 |
+| `POST /api/v1/auth/bupt/sessions` | 北邮统一认证成功后，使用回跳 `ticket` 换取第二课堂 JWT | 已在本人 Edge 中观察到 CAS **免输密码签发 Ticket 并重定向到此回调页面**；**换票是否成功生成可用于该账号的 JWT 尚未证实** |
 | `POST /api/v1/wecom/auth/sessions` | 企业微信 OAuth 回调 `code` 登录 | 依赖企业微信授权回跳，不是通用 refresh |
 | `POST /api/v1/auth/sessions/sudo` | 高权限账户生成 `sudo` / 超管环境临时会话 | **不是学生 Token 更新接口，不应调用来续期** |
 
@@ -44,12 +44,28 @@
 
 公开第三方项目 [byrdocs/bupt-auth](https://github.com/byrdocs/bupt-auth/blob/main/index.ts) 为 **`apiucloud.bupt.edu.cn/ykt-basics/oauth/token`** 实现 `grant_type=refresh_token`，其 `refresh_token` 属于北邮云平台 OAuth 体系，并非本项目观察到的第二课堂 `secondclass.tokenv3`。**不能把第二课堂 JWT 直接传给该 OAuth 接口，也不能把其刷新逻辑套用到第二课堂。**
 
+## Edge 浏览器 SSO 受控实测（2026-10-14）
+
+**测试目标：** 在不读取 Cookie、密码或 Ticket 值的前提下，验证当前本人 Edge 的 CAS 单点登录是否仍有效，以及第二课堂能否从 CAS 回调恢复登录。
+
+**方法与证据：**
+
+1. 浏览器已有北邮信息服务门户登录页，以及第二课堂网页会话。使用不带浏览器 Cookie 的匿名 `requests.get` 访问北邮官方 `https://auth.bupt.edu.cn/authserver/login`，附上实验用 `service` 地址后，返回 **HTTP 200 / CAS 登录表单**，说明匿名会话不能免登录。
+2. 在本人已登录的 **Edge** 中打开同一官方 CAS 地址，实验性的 `service` 参数指向 `https://dekt.bupt.edu.cn/bupt-login`（**这是根据网页路由推定的候选值，尚未从校方文档证实是注册的完整 Service URI**）。
+3. 浏览器未要求输入用户名、密码或验证码，自动返回第二课堂的 **`/bupt-login`** 路径。只检查 URL **查询参数名称**，确认存在 `ticket` 字段；未读取、显示、保存其值。**阶段 A：已证实同一浏览器会话能免交互取得 CAS Ticket（PASS）。**
+4. 第二课堂回调页面曾短暂显示“登录成功”，但随后新开 `/landing` 仍回到 `/login`；另一轮在 DevTools 打开时停留在 `/bupt-login`。因此无法确认换票 HTTP 状态、最终可用 JWT、同一用户 `sub` 或新 `exp`。**阶段 B：第二课堂 Ticket → 有效新 JWT（未通过验收），不能把“登录成功”提示当作完成证据。**
+5. 本次未把 CAS Ticket 提交给其他服务，没有主动手工调用换票 POST，没有修改本地 `.env`，没有开启自动认证轮询；没有改变既有后台监控代码。
+
+**未解决的关键因素：** 第二课堂注册的精确 CAS Service URI 可能并非本次实验 URI；其次可能存在页面路由、第二课堂账号权限或 Ticket 换票错误。仅通过页面短暂提示不能区分这些原因。需要使用经授权的官方回调 URI 和**只记录 HTTP 状态、不收集请求体及敏感 URL**的调试方法完成下一轮定向验证。
+
+**阶段判定：** SSO 浏览器已有会话 → CAS Ticket **PASS**；CAS Ticket → 第二课堂有效 JWT **UNVERIFIED**；把 JWT 无人值守同步至本地监控 **NOT IMPLEMENTED**。任何 SSO 登录状态及 CAS Cookie 都可能另行过期，故无法保证永久免费登录。
+
 ## 自动续期候选路线与评价
 
 | 路线 | 当前判定 | 前提 / 风险 |
 | --- | --- | --- |
 | A. 直接 refresh JWT | **No-Go（缺失协议证据）** | 需学校官方或后台开发者提供 refresh URL、输入凭证类型、返回字段、失效机制和明确许可 |
-| B. 借助现有学校 SSO 登录态重新取得第二课堂 Token | **有条件研究价值** | 可能在授权 Cookie 仍有效时拿到新的一次性 Ticket；必须确认身份认证服务的登录规则、Cookie 过期、无交互窗口和用户授权。不能保证永久续期 |
+| B. 借助现有学校 SSO 登录态重新取得第二课堂 Token | **第一步 PASS；端到端仍 No-Go** | 本人 Edge 的既有 SSO 会话可免输入密码取得一次性 Ticket，但第二课堂应用随后回到登录页；需进一步确认官方受信任的 service 回调 URI、换票结果、账户权限及 Cookie 时效 |
 | C. 存储账号密码自动重登 | **不推荐** | 扩大高价值凭证暴露面；验证码、MFA、频控、会话挑战可能使其失效，不应尝试规避 |
 | D. 用户手动续期 + Watcher 自动热更新 | **已上线且已验证** | 到期前通知用户，重新登录并替换本地 `.env`，无需重启、无额外账号密码存储 |
 
