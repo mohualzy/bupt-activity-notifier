@@ -1,49 +1,81 @@
-# 第二课堂活动接口：实证记录
+# 第二课堂学生端活动 API 实证记录
 
-记录日期：2026-10-14。公开仓库不包含原始解包代码、JS 产物、个人数据或访问凭证。
+更新：2026-10-14。本文只发布自行整理的接口事实和统计摘要，不包含学生身份信息、原始解密 JS、访问令牌、用户 Digest、Cookie 或完整抓包。
 
-## 已观察
+## 实测：已通过
 
-1. 登录后的 `dekt.bupt.edu.cn` 网站具有“申请活动”表单，包含独立的“需要报名/签到/签退”开关，以及校区选择器。
-2. 学生端“北邮第二课堂”微信小程序的活动首页能显示每条活动的标题、校区、地点、时间、报名、签到、签退状态；详情还能显示报名期限、面向对象和介绍。
-3. 当前界面加载的 19 条活动中，按“沙河校区 + 需签到 + 不签退”筛选，有 1 条匹配。这**不是全量活动覆盖率**。
-4. 经本人授权的 Windows 微信小程序包分析，确认其前端源码实际使用以下只读请求：
+- 电脑微信小程序“北邮第二课堂”的学生端活动列表，能够显示活动标题、日期、校区、位置、报名、签到、签退和主办方。
+- 小程序包只读静态分析确认登录后获取用户数据，再读取校园活动列表。
+- 使用 Edge **本人已登录的网页会话**，通过只读 GET 得到用户上下文 HTTP 200；再以该上下文读取活动列表 HTTP 200。
+- 使用本机**一次性回环内存通道**向 Python requests 提供当前有效 Token，Python **独立**完成两次 GET，均 HTTP 200。此测试未将 Token 保存到磁盘；临时测试服务结束后自动关闭。
+- 两种方式均返回 **19 条校园活动、1 条匹配默认筛选规则**；这是**当时的列表快照**，并非全校活动总数。
+
+### 用户上下文
+
+```http
+GET https://dekt.bupt.edu.cn/api/v1/user/{currentUserId}
+Authorization: Bearer <private JWT>
+```
+
+`currentUserId` 来源于有效 JWT 的 `sub` 声明，服务器负责验证 JWT。响应结构（仅列字段名）：
+
+```json
+{
+  "status": "ok",
+  "data": {
+    "id": "...",
+    "college_id": "...",
+    "class_id": "...",
+    "grade": "...",
+    "role_id": "..."
+  },
+  "digest": "...",
+  "error": null
+}
+```
+
+`digest` 是用户上下文响应的顶层字段，而非 `data.digest`。
+
+### 校园活动
 
 ```http
 GET https://dekt.bupt.edu.cn/api/v1/activity
-    ?college_id=...
-    &class_id=...
-    &grade=...
-    &role_id=...
-    &digest=...
+    ?college_id=<from user.data>
+    &class_id=<from user.data>
+    &grade=<from user.data>
+    &role_id=<from user.data>
+    &digest=<from user.digest>
     &is_group=0
+Authorization: Bearer <private JWT>
 ```
 
-源码相关逻辑显示活动数组位于 HTTP 客户端响应的 `response.data.data`，活动摘要位于 `response.data.digest`。具体网络响应包体与校区/签到字段尚未由独立 Python 客户端验收。
+响应顶层键为 `status`、`data`、`digest`、`error`；`data` 是活动数组，`digest` 是与活动列表对应的摘要数组。单条活动至少包含 `id`、`name`、`area`、`demands`、`location`、`activity_start_time`、`activity_end_time` 等键。
 
-5. `GET /api/v1/activity/{id}` 用于活动详情；`GET /api/v1/activity/class` 用于分类；`GET /api/v1/participation/acts` 是个人参与活动列表，而不是校园活动主页。
-
-## 字段编码
+### 字段编码
 
 ```text
-area: 0 西土城, 1 沙河, 2 线上, 3 海南, 100000000 其他
-demands: bit 0 (1) 需要报名
-         bit 1 (2) 需要签到
-         bit 2 (4) 需要签退
+area: 0 西土城校区, 1 沙河校区, 2 线上, 3 海南校区, 100000000 其他
+demands: bit 0 (1) 需报名；bit 1 (2) 需签到；bit 2 (4) 需签退
 ```
 
-数值来自小程序/网站前端逻辑，**不等于服务器 API 稳定性保证**。
+规则：`area == 1 and bool(demands & 2) and not bool(demands & 4)`。不完整数据必须跳过，不假定免签退。
 
-## 未完成 / Go-No-Go
+另外：`GET /api/v1/activity/{id}` 是活动详情；`GET /api/v1/activity/class` 是分类；`GET /api/v1/participation/acts` 为本人参与活动列表，而**不是**校园活动主页。
 
-- [ ] 使用本人授权凭证，成功发起一次独立 GET 请求并记录**脱敏** HTTP 状态及返回键名
-- [ ] 验证响应中确有 `id`、`area`、`demands`、`location` 等字段
-- [ ] 明确用户 `digest` 的合法获取方式和失效周期
-- [ ] 验证用户角色与普通学生的可见活动范围
-- [ ] 加入合理频控、重试和访问策略
-- [ ] 测试 ServerChan/OneBot 端到端推送（仅向本人测试渠道）
-- [ ] 单独评估微信接口及学校系统的访问规则
+## 未完成 / 不应夸大的能力
 
-## 安全边界
+- [x] 小程序真实列表/详情已观察
+- [x] 独立 Python HTTP 200 和返回字段确认
+- [x] 自动从用户 GET 响应取得 `digest`
+- [x] 默认筛选及去重逻辑离线测试
+- [ ] 长期 Token 续期/会话恢复方案（当前仅支持有效 Token）
+- [ ] 长时间运行的速率与稳定性验收
+- [ ] 校区、签到要求修改后的真实推送行为回归
+- [ ] ServerChan / OneBot 用自己的账号进行真实发送
+- [ ] 学校/小程序内部接口长期可用性与授权规则核对
 
-仅公开自行编写的采集/筛选/通知代码。不得提交真实学生账号、JWT、Cookie、查询 Digest、微信缓存包、解密 JS 或包含个人数据的抓包。仅使用 `GET` 进行信息查询，不实现报名或签到等写操作。
+## 安全与开发边界
+
+仓库中绝不保存微信小程序安装包、解包结果、个人学生数据、真实 Token 或 Digest。生产定时请求仅向官方 `https://dekt.bupt.edu.cn` 发起 `GET`；不请求报名、签到、签退、订阅或账号变更写接口。
+
+真实接口虽已验证，但未被证明具有官方第三方开发支持。上线前应检查学校规则，合理频控；账号异常、HTTP 401/403 时停止相关操作，提示本人重新登录。

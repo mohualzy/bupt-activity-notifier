@@ -1,4 +1,4 @@
-"""Polling and deduplication, with a safe first-run baseline."""
+"""Polling and per-activity deduplication, with a safe first-run baseline."""
 
 from __future__ import annotations
 
@@ -61,28 +61,24 @@ def run_once(
             output(render_activity(activity))
         return Result(len(raw), len(matched), 0)
 
-    all_ids = {a.id for a in activities}
     if not state_path.exists():
-        # Never flood notifications for already-existing activities on first run.
-        save_seen(state_path, all_ids)
-        output(f"First-run baseline saved ({len(all_ids)} activities). No notifications sent.")
+        # Remember only matches: a changed activity becoming eligible is still new.
+        save_seen(state_path, {a.id for a in matched})
+        output(f"First-run baseline saved ({len(matched)} matches). No notifications sent.")
         return Result(len(raw), len(matched), 0, initialized=True)
 
     seen = read_seen(state_path)
-    new_activities = [a for a in activities if a.id not in seen]
+    new_matches = [a for a in matched if a.id not in seen]
     sent = 0
-    for activity in new_activities:
-        if not matches_shahe_checkin_no_checkout(activity):
-            seen.add(activity.id)
-            continue
+    for activity in new_matches:
         if not notifier.configured:
             output("[preview, no channel configured]\n" + render_activity(activity))
-            continue  # Retry once a delivery channel is configured.
-        notifier.send(activity)  # On failure, do not mark this activity as seen.
+            continue
+        notifier.send(activity)  # Do not mark an activity seen after delivery failure.
         seen.add(activity.id)
+        save_seen(state_path, seen)  # Commit per successful notification.
         sent += 1
         output(f"Notified activity {activity.id}.")
 
-    save_seen(state_path, seen)
-    output(f"Fetched={len(raw)}, matched={len(matched)}, new={len(new_activities)}, sent={sent}.")
+    output(f"Fetched={len(raw)}, matched={len(matched)}, new_matches={len(new_matches)}, sent={sent}.")
     return Result(len(raw), len(matched), sent)
