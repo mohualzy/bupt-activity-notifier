@@ -16,6 +16,7 @@ from .api import (
     Credentials,
     token_seconds_remaining,
 )
+from .auth_notice import send_auth_notice_if_needed
 from .filtering import Activity, matches_shahe_checkin_no_checkout, render_activity
 from .monitor import run_once
 from .notifications import NotificationError, Notifier
@@ -126,17 +127,27 @@ def main(argv: list[str] | None = None) -> int:
     try:
         while True:
             try:
-                client = make_client()  # Fresh token on each iteration.
+                # Read private .env again so replacing SECONDCLASS_TOKEN or
+                # ServerChan SendKey works without restarting the watcher.
+                load_dotenv(override=True)
+                notifier = Notifier.from_environment()
+                client = make_client()
                 if warning := _token_warning(client):
                     if previous_status != "expiring":
                         print(warning)
                     previous_status = "expiring"
+                if not args.dry_run:
+                    try:
+                        send_auth_notice_if_needed(client, notifier, args.state)
+                    except (NotificationError, OSError, ValueError) as exc:
+                        # A failed optional reminder must not interrupt activity checks.
+                        print(f"Auth reminder failed ({type(exc).__name__}); retrying later.")
                 run_once(client, notifier, args.state, dry_run=args.dry_run)
                 if previous_status != "expiring":
                     previous_status = ""
             except AuthenticationExpired:
                 if previous_status != "expired":
-                    print("Authentication expired. Update your private Token file; watcher will retry.")
+                    print("Authentication expired. Update your private Token source; watcher will retry.")
                 previous_status = "expired"
             except (APIError, NotificationError, OSError, ValueError) as exc:
                 if previous_status != type(exc).__name__:

@@ -2,7 +2,7 @@
 
 面向北邮学生的**非官方、只读**第二课堂活动提醒器。读取学生端真实活动列表，筛选**沙河校区、需签到、不签退**的活动，并在有新匹配时通过微信或 QQ 提醒。
 
-**当前进度（2026-10-14）：** 校园活动接口已由 Windows 浏览器与独立 Python `requests` 两种方式实测 HTTP 200；当时返回 19 条活动，1 条符合筛选条件。推送接入代码、本地模拟测试及 **ServerChan → 本人微信端真实送达** 已验收；**长期自动登录及持续运行尚未验收**。
+**当前进度（2026-10-14）：** 校园活动接口已由 Windows 浏览器与独立 Python `requests` 两种方式实测 HTTP 200；当时返回 19 条活动，1 条符合筛选条件。推送接入代码、本地模拟测试及 **ServerChan → 本人微信端真实送达** 已验收；Windows 登录自启后台任务已经安装，并完成实际首次轮询。**自动登录和多日连续运行尚未验收**。
 
 ## 已实现
 
@@ -13,7 +13,8 @@
 - 首次运行建立基线；新增匹配活动推送，避免大量历史消息
 - 微信 ServerChan、QQ OneBot v11 私聊/群聊（需自行配置）
 - **分渠道确认与重试**：微信成功、QQ 失败时，重新运行不会再次给微信发送同一条消息
-- Token 可从私有文件每轮重新加载；失效提示与过期前 24 小时提醒
+- Windows 任务计划程序登录自启、日志轮换、单实例防重复运行
+- `--watch` 每轮重读私有 `.env` 或 Token 文件；到期前 24 小时和已过期时分别向配置的微信/QQ 渠道最多提醒一次
 - Docker Compose 部署样例及 CI 构建测试
 - 不报名、不签到、不签退、不修改账号
 
@@ -53,6 +54,16 @@ python -m bupt_activity_notifier --watch
 
 `--test-push` **会真的发送一条明确标为“测试”的消息**；只在你配置了本人可控的推送渠道后执行。第一次 `--once` 或 `--watch` 仅保存当前匹配活动作为基线，不会轰炸历史消息；之后新增匹配才通知。
 
+Windows 登录自启（需先运行一次 `--once` 初始化基线）：
+
+```powershell
+pwsh -NoProfile -File .\scripts\install_windows_task.ps1
+Get-ScheduledTask -TaskName BUPT-SecondClass-Activity-Watcher
+Get-Content .\logs\watch.log -Tail 20
+```
+
+计划任务以**当前登录用户**运行，电脑关机、睡眠或用户退出登录时不会继续轮询；参见 [部署指南](docs/DEPLOYMENT.md) 了解暂停、恢复和卸载。
+
 ## 关键字段
 
 | 字段 | 用法 |
@@ -68,12 +79,12 @@ python -m bupt_activity_notifier --watch
 
 - **微信**：在 `.env` 中设置 `SERVERCHAN_SENDKEY`，需先自行开通 [ServerChan Turbo](https://sct.ftqq.com/sendkey/)。
 - **QQ**：配置自己管理的 OneBot v11 HTTP 服务，`ONEBOT_URL`、`ONEBOT_ACCESS_TOKEN`、`ONEBOT_USER_ID` 或 `ONEBOT_GROUP_ID`。
-- **Token 文件**：可将 `SECONDCLASS_TOKEN_FILE=secrets/token.txt` 配在 `.env`，然后把有效 Token 放入这个**被 Git 忽略**的文件。运行中的 `--watch` 每轮重新读取该文件，更新 Token 无需重启程序。
+- **Token 更新**：运行中的 `--watch` 会每轮重新读取 `.env`；直接替换 `SECONDCLASS_TOKEN` 即可，无需重启。也可设置 `SECONDCLASS_TOKEN_FILE=secrets/token.txt`，优先从该被 Git 忽略的私有文件读取。
 - **失效处理**：当前**没有自动模拟登录或绕过验证码**的功能。Token 过期时停止有效数据查询，等本人合法重新认证并更新凭证。
 
 ServerChan Turbo 免费额度较小（官方文档说明每天 5 条），建议合理控制通知频率。单条消息只有在第三方接口确认成功后才记录为送达；极端情况下，如果第三方已发送成功但本机在写入状态前突然断电，仍有重发可能。
 
-项目工作状态默认位于被 Git 忽略的 `.state/seen.json`（v0.3 兼容旧版 v0.2 状态）。
+项目工作状态默认位于被 Git 忽略的 `.state/seen.json`（兼容旧版 v0.2 状态）；Token 过期提醒回执单独保存在 `.state/auth_notices.json`，只记录到期时间及成功渠道，不存放 JWT。
 
 ## Docker 部署
 
@@ -87,7 +98,11 @@ src/bupt_activity_notifier/
   filtering.py       # 沙河 / 签到 / 签退精确筛选
   monitor.py         # 持久化去重、分渠道回执和失败重试
   notifications.py   # 微信 ServerChan / QQ OneBot
+  auth_notice.py     # Token 到期前 / 到期后限次提醒
   cli.py             # demo / doctor / test-push / once / watch
+scripts/
+  windows_watch.py   # Windows 后台单实例启动与有限日志
+  install_windows_task.ps1  # 当前用户的登录自启任务
 tests/               # 合成数据单元测试，不包含真实 Token
 docs/RESEARCH.md     # 已实测证据与待解决的问题
 docs/DEPLOYMENT.md   # 本地与 Docker 使用说明

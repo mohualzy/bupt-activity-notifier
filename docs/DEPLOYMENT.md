@@ -1,4 +1,4 @@
-# 部署与运行（v0.3）
+# 部署与运行（v0.4）
 
 本项目**不会自动获取或续期微信/学校登录凭证**，且默认不向任何第三方发送通知。使用者需要自己配置 Token 和推送渠道。建议先完成本机只读验收，再考虑全天运行。
 
@@ -13,10 +13,10 @@ Copy-Item .env.example .env
 
 编辑私有的 `.env`，选择一种认证方式：
 
-1. `SECONDCLASS_TOKEN=你的有效JWT` —— 最简单，但轮换需要重启进程。
+1. `SECONDCLASS_TOKEN=你的有效JWT` —— 最简单；`--watch` 每轮重读 `.env`，更新后无需重启。
 2. `SECONDCLASS_TOKEN_FILE=secrets/token.txt` —— 推荐长期轮询时使用。先创建 `secrets` 目录，在 `token.txt` 保存**唯一的一行**有效 JWT。
 
-第二种方式每个轮询周期都会重新读取文件，因此换 Token 不需要重启本地 watcher。敏感文件已经被 `.gitignore` 忽略，不会随 Git 提交。
+两种方式都支持轮询期间更新：`--watch` 每轮重读 `.env`，如果配置 `SECONDCLASS_TOKEN_FILE`，则优先读取指定的私有文件。敏感文件已被 `.gitignore` 忽略，不会随 Git 提交。
 
 ```powershell
 python -m bupt_activity_notifier --doctor
@@ -32,6 +32,39 @@ python -m bupt_activity_notifier --watch
 ```
 
 退出按 Ctrl+C。默认 300 秒轮询一次，调整 `.env` 中的 `POLL_SECONDS`；程序最低强制 60 秒，建议 5 分钟或更低频，尊重学校系统负载。
+
+## Windows 登录自启（已在本机真实验收）
+
+建议先运行 `python -m bupt_activity_notifier --once` 初始化既有活动的去重基线，再注册当前登录用户的计划任务：
+
+```powershell
+pwsh -NoProfile -File .\scripts\install_windows_task.ps1
+Get-ScheduledTask -TaskName BUPT-SecondClass-Activity-Watcher
+Get-Content .\logs\watch.log -Tail 20
+```
+
+计划任务使用当前用户的 `pythonw.exe`，不弹出终端窗口；每 **300 秒**查询一次，进程异常退出会尝试重新启动。另有 `.state/watch.lock` 防止多个脚本实例重复推送，`logs/watch.log` 会轮换（最多 1 MB × 3 份）；两者都被 Git 忽略。
+
+运行与管理（在 PowerShell 中执行）：
+
+```powershell
+# 暂时停止任务，保留配置及去重历史
+Stop-ScheduledTask -TaskName BUPT-SecondClass-Activity-Watcher
+
+# 恢复运行（可在不重启电脑的情况下）
+Start-ScheduledTask -TaskName BUPT-SecondClass-Activity-Watcher
+
+# 禁止今后开机自动启动
+Disable-ScheduledTask -TaskName BUPT-SecondClass-Activity-Watcher
+
+# 恢复开机自启
+Enable-ScheduledTask -TaskName BUPT-SecondClass-Activity-Watcher
+
+# 完全注销自启任务；不删除项目数据
+Unregister-ScheduledTask -TaskName BUPT-SecondClass-Activity-Watcher -Confirm:$false
+```
+
+**运行边界：** 该任务在用户登录 Windows 后启动；电脑睡眠、关机或退出登录期间不会主动查询。它不是云端常驻服务，也没有“自动续签学校凭证”的能力。
 
 ## Docker Compose（Linux / Docker Desktop）
 
@@ -70,10 +103,10 @@ docker compose logs --tail=30 notifier
 
 - `--doctor` 显示接口活动数量及字段结构，不输出身份或 Token。
 - JWT 在客户端检测为过期后不再向学校请求接口；`--watch` 提示更换有效 Token，随后继续轮询 Token 文件。
-- 距 JWT 过期不足 24 小时会输出一次提醒（当前是**终端提示**，并不会主动发送微信提醒）。
+- 在 `--watch` 非干跑且已配置推送渠道的情况下，Token 到期前 **24 小时内**与**已过期**时分别最多通知每个渠道一次。只包含到期时间和操作提示，不包含 Token 或个人身份数据；回执保存在 `.state/auth_notices.json`。注意这会占用 ServerChan 的推送额度。
 - `.state/seen.json` 是本地去重状态。升级到 v0.3 后会在第一次写入时自动使用新版格式；旧版 `seen_ids` 可读。
 - 配置、推送与账号文件均不得提交 GitHub。请使用私有 Token，低频只读访问，不尝试绕过学校的验证/身份限制。
 
 ## 尚未完成
 
-真实 ServerChan/OneBot 推送密钥联调、自动重新登录的合法实现、Docker Desktop 本机部署/长期稳定性实测仍待完成。以上说明不应被理解为这三项已验收。
+ServerChan → 本人微信真实送达**已验收**。仍待完成：真实 OneBot QQ 联调、合法自动重新登录方案、Docker Desktop 本机部署以及 Windows 守护进程多日稳定运行实测。这些能力目前不得宣称已验收。

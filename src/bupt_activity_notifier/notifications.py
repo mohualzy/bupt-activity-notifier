@@ -53,10 +53,10 @@ class Notifier:
     def configured(self) -> bool:
         return bool(self.channels)
 
-    def _serverchan(self, body: str, client: requests.Session) -> None:
+    def _serverchan(self, body: str, client: requests.Session, *, title: str) -> None:
         response = client.post(
             "https://sctapi.ftqq.com/" + quote(self.serverchan_key, safe="") + ".send",
-            data={"title": "北邮第二课堂：符合条件的新活动", "desp": body},
+            data={"title": title, "desp": body},
             timeout=15,
         )
         response.raise_for_status()
@@ -96,21 +96,28 @@ class Notifier:
         if not isinstance(result, dict) or result.get("status") != "ok" or result.get("retcode") != 0:
             raise NotificationError("OneBot refused the notification.")
 
-    def send_channel(self, channel: str, activity: Activity) -> None:
-        """Send a single activity to one channel. On any failure, never expose secrets."""
+    def _deliver(self, channel: str, title: str, body: str) -> None:
+        """Deliver one sanitized notification without leaking credentials on errors."""
         if channel not in self.channels:
             raise NotificationError("Requested notification channel is not configured.")
         client = self.session or requests.Session()
-        body = render_activity(activity)
         try:
             if channel == "serverchan":
-                self._serverchan(body, client)
+                self._serverchan(body, client, title=title)
             else:
-                self._onebot(channel, body, client)
+                self._onebot(channel, f"{title}\n{body}", client)
         except NotificationError:
             raise
         except (requests.RequestException, ValueError, TypeError, KeyError):
             raise NotificationError(f"Notification delivery failed ({channel}).") from None
+
+    def send_channel(self, channel: str, activity: Activity) -> None:
+        """Send an activity to one channel with a dedicated delivery receipt."""
+        self._deliver(channel, "北邮第二课堂：符合条件的新活动", render_activity(activity))
+
+    def send_notice_channel(self, channel: str, title: str, body: str) -> None:
+        """Send a non-activity system notice (e.g. token renewal reminder)."""
+        self._deliver(channel, title, body)
 
     def send(self, activity: Activity) -> None:
         """Compatibility helper; monitor uses send_channel for per-channel receipts."""

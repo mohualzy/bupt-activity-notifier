@@ -142,7 +142,7 @@ class ActivityClient:
                 headers={
                     "Authorization": "Bearer " + self.credentials.token,
                     "Accept": "application/json",
-                    "User-Agent": "bupt-activity-notifier/0.3 (read-only)",
+                    "User-Agent": "bupt-activity-notifier/0.4 (read-only)",
                 },
                 timeout=self.timeout,
                 allow_redirects=False,

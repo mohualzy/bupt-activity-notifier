@@ -112,6 +112,25 @@ class NotificationTests(unittest.TestCase):
             Notifier(onebot_url="https://example.org", onebot_user_id="bad-id").send(self.activity)
         self.assertNotIn("bad-id", str(caught.exception))
 
+    def test_auth_expiry_notice_uses_distinct_title(self):
+        response = Mock()
+        response.json.return_value = {"code": 0}
+        session = Mock()
+        session.post.return_value = response
+        notifier = Notifier(serverchan_key="fake-key", session=session)
+        notifier.send_notice_channel("serverchan", "请更新登录凭证", "测试提醒，不含任何密钥")
+        self.assertEqual(session.post.call_args.kwargs["data"]["title"], "请更新登录凭证")
+        self.assertEqual(session.post.call_args.kwargs["data"]["desp"], "测试提醒，不含任何密钥")
+
+    def test_auth_expiry_notice_redacts_request_error(self):
+        session = Mock()
+        session.post.side_effect = requests.RequestException("secret-in-URL")
+        notifier = Notifier(serverchan_key="fake-key", session=session)
+        with self.assertRaises(NotificationError) as caught:
+            notifier.send_notice_channel("serverchan", "到期", "请重新登录")
+        self.assertNotIn("secret-in-URL", str(caught.exception))
+        self.assertIsNone(caught.exception.__cause__)
+
 
 if __name__ == "__main__":
     unittest.main()
