@@ -76,19 +76,26 @@ def _retry_allowed(state_path: Path, now: float) -> bool:
             not isinstance(data, dict) or data.get("version") != 1
             or not isinstance(data.get("retry_after"), (int, float))
             or isinstance(data.get("retry_after"), bool)
+            or not isinstance(data.get("manual_required", False), bool)
         ):
             return False  # Corrupted state must not cause a login storm.
+        if data.get("manual_required", False):
+            return False  # Official challenge/rejection requires human review.
         return now >= float(data["retry_after"])
     except (ValueError, OSError, UnicodeError):
         return False
 
 
-def _set_retry(state_path: Path, now: float) -> None:
+def _set_retry(state_path: Path, now: float, *, manual_required: bool = False) -> None:
     path = state_path.parent / RETRY_STATE_FILENAME
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_suffix(path.suffix + ".tmp")
     temporary.write_text(
-        json.dumps({"version": 1, "retry_after": int(now + RETRY_DELAY_SECONDS)}),
+        json.dumps({
+            "version": 1,
+            "retry_after": int(now + RETRY_DELAY_SECONDS),
+            "manual_required": manual_required,
+        }),
         encoding="utf-8",
     )
     os.replace(temporary, path)
@@ -236,9 +243,15 @@ def renew_if_due(client: ActivityClient, state_path: Path, *, force: bool = Fals
         save_renewed_token(token)
         _clear_retry(state_path)
         return True
-    except RenewalError:
-        # Raise only our fixed-message errors. CLI prints a whitelisted code,
-        # never arbitrary browser exceptions, identity, or Token information.
+    except RenewalError as exc:
+        # A challenge or account rejection must not be retried forever by the
+        # background watcher. Only a deliberate manual test may clear this
+        # lock, and only once a new student JWT passes all validations.
+        if not force and exc.code in ("verification_required", "login_rejected"):
+            try:
+                _set_retry(state_path, now, manual_required=True)
+            except OSError:
+                pass  # Existing retry guard was already persisted before login.
         raise
     except (SecretStoreError, OSError):
         raise RenewalError(

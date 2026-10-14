@@ -135,6 +135,29 @@ class RenewalTests(unittest.TestCase):
             self.assertFalse(auto_renew.renew_if_due(self.client, state))
         read_login.assert_not_called()
 
+    @patch("bupt_activity_notifier.auto_renew.save_renewed_token")
+    @patch("bupt_activity_notifier.auto_renew.browser_sign_in")
+    @patch("bupt_activity_notifier.auto_renew.read_login")
+    def test_verification_challenge_stops_all_unattended_retries(self, read_login, browser, save):
+        read_login.return_value = ("synthetic-user", "synthetic-password")
+        browser.side_effect = auto_renew.RenewalError(
+            "Official verification required.", code="verification_required"
+        )
+        with tempfile.TemporaryDirectory() as folder:
+            state = Path(folder) / "seen.json"
+            with self.assertRaises(auto_renew.RenewalError):
+                auto_renew.renew_if_due(self.client, state)
+            guard = json.loads(
+                (Path(folder) / auto_renew.RETRY_STATE_FILENAME).read_text(encoding="utf-8")
+            )
+            self.assertTrue(guard["manual_required"])
+            # Even after the normal 12h cooldown, do not retry this challenge.
+            far_future = guard["retry_after"] + 365 * 86400
+            self.assertFalse(auto_renew._retry_allowed(state, far_future))
+            self.assertFalse(auto_renew.renew_if_due(self.client, state))
+            self.assertEqual(browser.call_count, 1)
+        save.assert_not_called()
+
     def test_windows_store_rejects_missing_data_without_calling_os(self):
         with self.assertRaises(SecretStoreError):
             _write("fake", "", "password")
