@@ -86,6 +86,14 @@ ServerChan Turbo 免费额度较小（官方文档说明每天 5 条），建议
 
 项目工作状态默认位于被 Git 忽略的 `.state/seen.json`（兼容旧版 v0.2 状态）；Token 过期提醒回执单独保存在 `.state/auth_notices.json`，只记录到期时间及成功渠道，不存放 JWT。
 
+## Edge 正常登录后自动更新 Token（一次性扩展安装）
+
+可选：在 **Microsoft Edge** 通过北邮第二课堂官网登录成功后，浏览器扩展自动把新 JWT 交给**本机 Native Messaging** 主机。只有同一账号、相同登录上下文、过期时间延长且真实学生端活动查询 HTTP 200 的凭证才会原子替换项目私有 .env 中的 SECONDCLASS_TOKEN（配置 Token 文件时更新对应私有文件）。原来的 5 分钟监控随后自动读取新凭证，无需重启，也不会清空活动去重记录。
+
+- 一次性部署：安装脚本 `scripts/install_edge_token_sync.ps1` 只注册本机消息主机；还需要本人在 Edge 的 `edge://extensions` 中开启开发人员模式，使用“加载解压缩的扩展”，选择本仓库的 `edge_token_sync` 目录。扩展 ID 应为 `mcohcjkicfoblidoolgbpladhehllpbb`。
+- 扩展仅在 `https://dekt.bupt.edu.cn/*` 页面生效，不读取浏览器 Cookie、密码、其他网站，也不开放本地 HTTP 端口。不会自动登录、不解决验证码或微信小程序端续期；**只同步已经由正常 Edge 网页合法签发的新 Token**。
+- 具体安装、验证、安全边界及卸载方式见 [Edge 本机同步指南](docs/EDGE_TOKEN_SYNC.md)。扩展尚未在本人的 Edge 中人工启用前，不得声称真实端到端同步已验收。
+
 ## Docker 部署
 
 仓库包含 `Dockerfile` 和 `compose.yaml`，支持**非 root 容器、只读根文件系统、独立持久卷、只读密钥文件**。见 [部署指南](docs/DEPLOYMENT.md)。Docker 不负责自动获取你的登录凭证。

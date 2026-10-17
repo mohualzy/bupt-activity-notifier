@@ -1,0 +1,31 @@
+{
+  "manifest_version": 3,
+  "name": "北邮第二课堂 · 本机 Token 同步",
+  "version": "1.0.0",
+  "description": "仅从北邮第二课堂官网登录页同步新 Token 到本机监控；不收集密码或 Cookie。",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAyhiq06S9Q+GmlbuApjPMbvQIIKxM5vgk+6lb0l8oOMb4LzV7TTe7pDzO79PWLh3X1vor4Hg7BaIAalo1pAOTw8/v3uPFMJEDzKSKxjit8o9Vv2EJi6KgN4FEnUhIF5UC/vmzfWpt7KIZiYA78IoawdfOvp1t9BZ63/D9xUdGddowaiGvPNAq5xXdbegAg36sVZBOGkbzgs5fF3f4N/llwl7IF2lb6hvCjRGpuBw+viwZEleko7txRlHuhPYFCMF4pEwKkfbfABxbhYbVn6x9onpJcZTuDVaV3neKYk994sAMoVO9X/oCUWqI6KVhFTPQfVa20jP5dA7peudSply4gwIDAQAB",
+  "permissions": [
+    "nativeMessaging",
+    "storage"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://dekt.bupt.edu.cn/*"
+      ],
+      "js": [
+        "content.js"
+      ],
+      "run_at": "document_start",
+      "all_frames": false,
+      "world": "ISOLATED"
+    }
+  ],
+  "action": {
+    "default_title": "北邮二课 Token 同步",
+    "default_popup": "popup.html"
+  }
+}

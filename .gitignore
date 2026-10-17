@@ -1,6 +1,8 @@
 .venv/
 __pycache__/
 *.py[cod]
+# Locally compiled Windows Edge native-message launcher; source is tracked.
+scripts/edge_native_host_launcher.exe
 .pytest_cache/
 .coverage
 dist/
